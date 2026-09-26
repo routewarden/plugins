@@ -13,7 +13,6 @@ import (
 
 	"github.com/routewarden/tcp-warden/plugins"
 	"github.com/routewarden/tcp-warden/plugins/sdk"
-	"github.com/routewarden/tcp-warden/protocol"
 )
 
 func init() {
@@ -87,7 +86,16 @@ func (p *Plugin) CreateInspector(config map[string]any) (sdk.Inspector, error) {
 			}
 		}
 	}
+	insp.buildLookup()
 	return insp, nil
+}
+
+// buildLookup builds the internal lookup map for blocked operations.
+func (insp *Inspector) buildLookup() {
+	insp.blockedOpsMap = make(map[string]struct{})
+	for _, op := range insp.BlockedOps {
+		insp.blockedOpsMap[strings.ToLower(strings.TrimSpace(op))] = struct{}{}
+	}
 }
 
 // SelfTest verifies that a MongoDB OP_MSG with an authentication error triggers OnAuthFailure.
@@ -268,16 +276,6 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		if _, err := client.Write(fullResp); err != nil {
 			return result(err), false, "", nil
 		}
-
-		// After successful auth handshake, switch to raw proxy
-		if respOpCode == 2013 && isAuthOk(respBody) {
-			client.SetDeadline(time.Time{})
-			upstream.SetDeadline(time.Time{})
-			res := protocol.Proxy(client, upstream)
-			bytesIn.Add(res.BytesIn)
-			bytesOut.Add(res.BytesOut)
-			return result(nil), false, "", nil
-		}
 	}
 }
 
@@ -340,35 +338,80 @@ func encodeBSONDoc(doc map[string]any) []byte {
 	return out
 }
 
-// extractOpMsgCommandName parses the first key of the BSON body document in an OP_MSG section.
+// extractOpMsgCommandName parses the command name from the BSON body document in an OP_MSG section.
+// It skips metadata keys (e.g. keys starting with '$', 'lsid', etc.) to find the actual command name.
 func extractOpMsgCommandName(body []byte) (string, bool) {
 	if len(body) < 5 {
 		return "", false
 	}
 	// Skip flagBits (4 bytes) and section kind (1 byte)
 	bson := body[5:]
-	if len(bson) < 5 {
-		return "", false
-	}
-	// BSON doc: 4-byte length, then elements
 	if len(bson) < 4 {
 		return "", false
 	}
-	pos := 4 // skip doc length
-	if pos >= len(bson) {
+	docLen := int(binary.LittleEndian.Uint32(bson[0:4]))
+	if docLen < 5 || docLen > len(bson) {
 		return "", false
 	}
-	// First element type
-	pos++ // skip type byte
-	// Read key (null-terminated)
-	start := pos
-	for pos < len(bson) && bson[pos] != 0x00 {
+	pos := 4
+	for pos < docLen-1 {
+		elemType := bson[pos]
 		pos++
+		// Read key (null-terminated)
+		start := pos
+		for pos < docLen && bson[pos] != 0x00 {
+			pos++
+		}
+		if pos >= docLen {
+			return "", false
+		}
+		key := string(bson[start:pos])
+		pos++ // skip null terminator
+
+		keyLower := strings.ToLower(key)
+		if !strings.HasPrefix(keyLower, "$") && keyLower != "lsid" && keyLower != "apiversion" && keyLower != "txnnumber" && keyLower != "autocommit" {
+			return keyLower, true
+		}
+
+		// Skip value based on elemType to continue to next key
+		switch elemType {
+		case 0x01: // double
+			pos += 8
+		case 0x02: // string
+			if pos+4 > docLen {
+				return "", false
+			}
+			strLen := int(binary.LittleEndian.Uint32(bson[pos : pos+4]))
+			pos += 4 + strLen
+		case 0x03, 0x04: // document or array
+			if pos+4 > docLen {
+				return "", false
+			}
+			subLen := int(binary.LittleEndian.Uint32(bson[pos : pos+4]))
+			pos += subLen
+		case 0x05: // binary
+			if pos+4 > docLen {
+				return "", false
+			}
+			binLen := int(binary.LittleEndian.Uint32(bson[pos : pos+4]))
+			pos += 4 + 1 + binLen
+		case 0x07: // objectid
+			pos += 12
+		case 0x08: // bool
+			pos += 1
+		case 0x09, 0x11, 0x12: // datetime, timestamp, int64
+			pos += 8
+		case 0x0a: // null
+			// 0 bytes
+		case 0x10: // int32
+			pos += 4
+		case 0x13: // decimal128
+			pos += 16
+		default:
+			return "", false
+		}
 	}
-	if pos >= len(bson) {
-		return "", false
-	}
-	return strings.ToLower(string(bson[start:pos])), true
+	return "", false
 }
 
 // isAuthError checks if an OP_MSG response body contains an authentication error code.

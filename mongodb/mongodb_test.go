@@ -24,7 +24,15 @@ func TestMongoDB_BlockedOp(t *testing.T) {
 	defer upA.Close()
 	defer upB.Close()
 
-	_ = upB // upstream not used for blocked ops test
+	// Drain upB in the background so pipe writes never deadlock if inspection fails
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			if _, err := upB.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
 
 	insp := &Inspector{BlockedOps: []string{"drop"}}
 	ctx := &sdk.DefaultContext{ServiceName: "test", ClientAddress: "127.0.0.1"}

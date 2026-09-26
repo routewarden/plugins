@@ -27,11 +27,50 @@ func (p *Plugin) Manifest() sdk.Manifest {
 }
 
 func (p *Plugin) ValidateConfig(config map[string]any) error {
+	if config == nil {
+		return nil
+	}
+	if v, ok := config["blocked_protocol_versions"]; ok {
+		switch items := v.(type) {
+		case []int:
+		case []any:
+			for _, item := range items {
+				switch item.(type) {
+				case int, int64, float64:
+				default:
+					return errors.New("blocked_protocol_versions must be a list of integers")
+				}
+			}
+		default:
+			return errors.New("blocked_protocol_versions must be a list of integers")
+		}
+	}
 	return nil
 }
 
 func (p *Plugin) CreateInspector(config map[string]any) (sdk.Inspector, error) {
-	return &Inspector{}, nil
+	insp := &Inspector{}
+	if config == nil {
+		return insp, nil
+	}
+	if v, ok := config["blocked_protocol_versions"]; ok {
+		switch items := v.(type) {
+		case []int:
+			insp.BlockedProtocolVersions = items
+		case []any:
+			for _, item := range items {
+				switch n := item.(type) {
+				case int:
+					insp.BlockedProtocolVersions = append(insp.BlockedProtocolVersions, n)
+				case int64:
+					insp.BlockedProtocolVersions = append(insp.BlockedProtocolVersions, int(n))
+				case float64:
+					insp.BlockedProtocolVersions = append(insp.BlockedProtocolVersions, int(n))
+				}
+			}
+		}
+	}
+	return insp, nil
 }
 
 // SelfTest executes synthetic in-memory test using net.Pipe.

@@ -283,14 +283,32 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 	bytesOut.Add(1)
 	numSec := int(numSecBuf[0])
 
-	var secTypes []byte
-	if numSec > 0 {
-		secTypes = make([]byte, numSec)
-		if _, err := io.ReadFull(upstream, secTypes); err != nil {
-			return result(err), false, "", nil
+	if numSec == 0 {
+		// Server rejected connection before security handshake (RFB 3.7+ error reason follows)
+		var errLenBuf [4]byte
+		if _, err := io.ReadFull(upstream, errLenBuf[:]); err == nil {
+			bytesOut.Add(4)
+			errLen := binary.BigEndian.Uint32(errLenBuf[:])
+			if errLen > 0 && errLen < 4096 {
+				errStr := make([]byte, errLen)
+				if _, err := io.ReadFull(upstream, errStr); err == nil {
+					bytesOut.Add(int64(errLen))
+					client.SetWriteDeadline(time.Now().Add(5 * time.Second))
+					_, _ = client.Write(append(append(numSecBuf[:], errLenBuf[:]...), errStr...))
+					return result(nil), false, "", nil
+				}
+			}
 		}
-		bytesOut.Add(int64(numSec))
+		client.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		_, _ = client.Write(numSecBuf[:])
+		return result(nil), false, "", nil
 	}
+
+	secTypes := make([]byte, numSec)
+	if _, err := io.ReadFull(upstream, secTypes); err != nil {
+		return result(err), false, "", nil
+	}
+	bytesOut.Add(int64(numSec))
 
 	// Forward security types to client
 	client.SetWriteDeadline(time.Now().Add(10 * time.Second))

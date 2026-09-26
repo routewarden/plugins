@@ -170,9 +170,9 @@ func readRedisResponse(r *bufio.Reader) ([]byte, error) {
 	}
 
 	switch line[0] {
-	case '+', '-', ':':
+	case '+', '-', ':', '_', ',', '#', '(':
 		return resp, nil
-	case '$':
+	case '$', '!', '=':
 		trimmed := strings.TrimRight(line[1:], "\r\n")
 		argLen, err := strconv.Atoi(trimmed)
 		if err != nil || argLen < 0 {
@@ -183,13 +183,27 @@ func readRedisResponse(r *bufio.Reader) ([]byte, error) {
 			return resp, err
 		}
 		return append(resp, body...), nil
-	case '*':
+	case '*', '~', '>':
 		trimmed := strings.TrimRight(line[1:], "\r\n")
 		count, err := strconv.Atoi(trimmed)
 		if err != nil || count <= 0 {
 			return resp, nil
 		}
-		for i := 0; i < count; i++ {
+		for range count {
+			sub, err := readRedisResponse(r)
+			if err != nil {
+				return resp, err
+			}
+			resp = append(resp, sub...)
+		}
+		return resp, nil
+	case '%':
+		trimmed := strings.TrimRight(line[1:], "\r\n")
+		count, err := strconv.Atoi(trimmed)
+		if err != nil || count <= 0 {
+			return resp, nil
+		}
+		for i := 0; i < count*2; i++ {
 			sub, err := readRedisResponse(r)
 			if err != nil {
 				return resp, err

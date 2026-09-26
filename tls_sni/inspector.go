@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -195,9 +194,20 @@ func extractSNI(data []byte) (string, error) {
 }
 
 func matchDomain(domain, pattern string) bool {
-	if domain == pattern {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	pattern = strings.ToLower(strings.TrimSpace(pattern))
+	if pattern == "*" || pattern == domain {
 		return true
 	}
-	matched, err := filepath.Match(pattern, domain)
-	return err == nil && matched
+	if strings.HasPrefix(pattern, "*.") {
+		suffix := pattern[1:] // e.g. ".example.com"
+		if strings.HasSuffix(domain, suffix) {
+			return true
+		}
+		// Also match root apex domain (e.g. "*.example.com" matches "example.com")
+		if domain == pattern[2:] {
+			return true
+		}
+	}
+	return false
 }

@@ -267,27 +267,34 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		}
 		bytesOut.Add(int64(len(respLine)))
 
-		// If response is VALUE, read the data block too
+		// In Memcached, a get/gets response consists of zero or more VALUE blocks followed by END\r\n
 		var respExtra []byte
-		if strings.HasPrefix(respLine, "VALUE ") {
-			// VALUE <key> <flags> <bytes>\r\n<data>\r\n
-			parts := strings.Fields(respLine)
+		currLine := respLine
+		for strings.HasPrefix(currLine, "VALUE ") {
+			parts := strings.Fields(currLine)
 			if len(parts) >= 4 {
 				dataLen := 0
 				fmt.Sscanf(parts[3], "%d", &dataLen)
-				if dataLen > 0 && dataLen <= 1024*1024 {
+				if dataLen >= 0 && dataLen <= 1024*1024 {
 					dataBuf := make([]byte, dataLen+2)
 					if _, err := io.ReadFull(upstreamReader, dataBuf); err != nil {
 						return result(err), false, "", nil
 					}
 					bytesOut.Add(int64(len(dataBuf)))
-					respExtra = dataBuf
-					// Also read "END\r\n"
-					endLine, _ := upstreamReader.ReadString('\n')
-					bytesOut.Add(int64(len(endLine)))
-					respExtra = append(respExtra, []byte(endLine)...)
+					respExtra = append(respExtra, dataBuf...)
 				}
 			}
+			// Read next line (another VALUE or END\r\n)
+			nextLine, err := upstreamReader.ReadString('\n')
+			if err != nil {
+				return result(err), false, "", nil
+			}
+			bytesOut.Add(int64(len(nextLine)))
+			respExtra = append(respExtra, []byte(nextLine)...)
+			if !strings.HasPrefix(nextLine, "VALUE ") {
+				break
+			}
+			currLine = nextLine
 		}
 
 		// Forward response to client

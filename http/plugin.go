@@ -349,6 +349,7 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 	}
 
 	clientReader := bufio.NewReader(client)
+	upstreamReader := bufio.NewReader(upstream)
 
 	for {
 		client.SetReadDeadline(time.Now().Add(5 * time.Minute))
@@ -445,7 +446,9 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		if strings.EqualFold(req.Header.Get("Upgrade"), "websocket") {
 			client.SetDeadline(time.Time{})
 			upstream.SetDeadline(time.Time{})
-			res := protocol.Proxy(client, upstream)
+			bufferedClient := &protocol.BufferedConn{Reader: clientReader, Conn: client}
+			bufferedUpstream := &protocol.BufferedConn{Reader: upstreamReader, Conn: upstream}
+			res := protocol.Proxy(bufferedClient, bufferedUpstream)
 			bytesIn.Add(res.BytesIn)
 			bytesOut.Add(res.BytesOut)
 			return result(nil), false, "", nil
@@ -453,7 +456,7 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 
 		// Read response from upstream and forward to client
 		upstream.SetReadDeadline(time.Now().Add(1 * time.Minute))
-		resp, err := http.ReadResponse(bufio.NewReader(upstream), req)
+		resp, err := http.ReadResponse(upstreamReader, req)
 		if err != nil {
 			return result(err), false, "", nil
 		}
