@@ -1,6 +1,15 @@
 name: memcached
 version: "1.0.0"
+manifest_version: "1.0.0"
 description: "Memcached ASCII/binary protocol inspector with dangerous command blocking"
 author: "RouteWarden Team"
 protocols:
   - memcached
+default_service:
+  listen: ":11212"
+  upstream: "127.0.0.1:11211"
+  protocol: "memcached"
+  rate_limit:
+    connections_per_minute: 120
+    burst: 20
+

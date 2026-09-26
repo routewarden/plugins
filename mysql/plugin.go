@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	_ "embed"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -12,6 +13,9 @@ import (
 	"github.com/routewarden/tcp-warden/plugins/sdk"
 )
 
+//go:embed plugin.yaml
+var manifestYAML []byte
+
 func init() {
 	plugins.Register(&Plugin{})
 }
@@ -20,13 +24,7 @@ func init() {
 type Plugin struct{}
 
 func (p *Plugin) Manifest() sdk.Manifest {
-	return sdk.Manifest{
-		Name:        "mysql",
-		Version:     "1.0.0",
-		Description: "MySQL and MariaDB wire protocol inspector detecting authentication failures and SSL handshakes",
-		Author:      "RouteWarden Team",
-		Protocols:   []string{"mysql", "mariadb"},
-	}
+	return sdk.MustParseManifest(manifestYAML)
 }
 
 func (p *Plugin) ValidateConfig(config map[string]any) error {

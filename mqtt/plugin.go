@@ -1,6 +1,7 @@
 package mqtt
 
 import (
+	_ "embed"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -12,6 +13,9 @@ import (
 	"github.com/routewarden/tcp-warden/plugins/sdk"
 )
 
+//go:embed plugin.yaml
+var manifestYAML []byte
+
 func init() {
 	plugins.Register(&Plugin{})
 }
@@ -20,13 +24,7 @@ func init() {
 type Plugin struct{}
 
 func (p *Plugin) Manifest() sdk.Manifest {
-	return sdk.Manifest{
-		Name:        "mqtt",
-		Version:     "1.0.0",
-		Description: "Example custom RouteWarden plugin for IoT MQTT brokers with ClientID filtering and protocol anomaly detection",
-		Author:      "Community Contributor",
-		Protocols:   []string{"mqtt"},
-	}
+	return sdk.MustParseManifest(manifestYAML)
 }
 
 func (p *Plugin) ValidateConfig(config map[string]any) error {

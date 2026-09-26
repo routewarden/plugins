@@ -1,6 +1,7 @@
 package amqp
 
 import (
+	_ "embed"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -15,6 +16,9 @@ import (
 	"github.com/routewarden/tcp-warden/plugins/sdk"
 	"github.com/routewarden/tcp-warden/protocol"
 )
+
+//go:embed plugin.yaml
+var manifestYAML []byte
 
 func init() {
 	plugins.Register(&Plugin{})
@@ -48,13 +52,7 @@ const (
 type Plugin struct{}
 
 func (p *Plugin) Manifest() sdk.Manifest {
-	return sdk.Manifest{
-		Name:        "amqp",
-		Version:     "1.0.0",
-		Description: "AMQP 0-9-1 (RabbitMQ) protocol inspector with auth failure detection and vhost filtering",
-		Author:      "RouteWarden Team",
-		Protocols:   []string{"amqp", "rabbitmq"},
-	}
+	return sdk.MustParseManifest(manifestYAML)
 }
 
 func (p *Plugin) ValidateConfig(config map[string]any) error {

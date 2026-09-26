@@ -1,5 +1,6 @@
 name: http
 version: "1.1.0"
+manifest_version: "1.0.0"
 description: "HTTP/1.x protocol inspector with Host header filtering, User-Agent blocking, path allowlists, and regex path/header blocking"
 author: "RouteWarden Team"
 protocols:
@@ -11,3 +12,11 @@ config:
   blocked_headers:
     User-Agent: "(?i)(sqlmap|nikto|acunetix|masscan)"
     X-Forwarded-Host: ".*"
+default_service:
+  listen: ":8081"
+  upstream: "127.0.0.1:80"
+  protocol: "http"
+  rate_limit:
+    connections_per_minute: 120
+    burst: 20
+

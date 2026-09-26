@@ -1,6 +1,7 @@
 package tls_sni
 
 import (
+	_ "embed"
 	"errors"
 	"fmt"
 	"net"
@@ -11,6 +12,9 @@ import (
 	"github.com/routewarden/tcp-warden/plugins/sdk"
 )
 
+//go:embed plugin.yaml
+var manifestYAML []byte
+
 func init() {
 	plugins.Register(&Plugin{})
 }
@@ -19,13 +23,7 @@ func init() {
 type Plugin struct{}
 
 func (p *Plugin) Manifest() sdk.Manifest {
-	return sdk.Manifest{
-		Name:        "tls_sni",
-		Version:     "1.0.0",
-		Description: "Zero-decryption TLS ClientHello inspector extracting SNI domain names and enforcing domain allow/deny rules",
-		Author:      "RouteWarden Team",
-		Protocols:   []string{"tls", "sni"},
-	}
+	return sdk.MustParseManifest(manifestYAML)
 }
 
 func (p *Plugin) ValidateConfig(config map[string]any) error {

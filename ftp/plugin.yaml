@@ -1,8 +1,18 @@
 name: ftp
 version: 1.0.0
+manifest_version: "1.0.0"
 description: FTP wire protocol inspector (RFC 959) detecting brute-force authentication failures (530 Login incorrect) and AUTH TLS handovers
 author: RouteWarden Team
 protocols:
   - ftp
 config:
   max_auth_failures: 5
+default_service:
+  listen: ":2121"
+  upstream: "127.0.0.1:21"
+  protocol: "ftp"
+  rate_limit:
+    connections_per_minute: 30
+    burst: 5
+  max_auth_failures: 5
+  ban_after_failures: 5

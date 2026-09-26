@@ -1,6 +1,7 @@
 package vnc
 
 import (
+	_ "embed"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -15,6 +16,9 @@ import (
 	"github.com/routewarden/tcp-warden/plugins/sdk"
 	"github.com/routewarden/tcp-warden/protocol"
 )
+
+//go:embed plugin.yaml
+var manifestYAML []byte
 
 func init() {
 	plugins.Register(&Plugin{})
@@ -41,13 +45,7 @@ const (
 type Plugin struct{}
 
 func (p *Plugin) Manifest() sdk.Manifest {
-	return sdk.Manifest{
-		Name:        "vnc",
-		Version:     "1.0.0",
-		Description: "VNC/RFB protocol inspector with auth failure detection and version filtering",
-		Author:      "RouteWarden Team",
-		Protocols:   []string{"vnc", "rfb"},
-	}
+	return sdk.MustParseManifest(manifestYAML)
 }
 
 func (p *Plugin) ValidateConfig(config map[string]any) error {

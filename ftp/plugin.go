@@ -1,6 +1,7 @@
 package ftp
 
 import (
+	_ "embed"
 	"errors"
 	"fmt"
 	"net"
@@ -11,6 +12,9 @@ import (
 	"github.com/routewarden/tcp-warden/plugins/sdk"
 )
 
+//go:embed plugin.yaml
+var manifestYAML []byte
+
 func init() {
 	plugins.Register(&Plugin{})
 }
@@ -19,13 +23,7 @@ func init() {
 type Plugin struct{}
 
 func (p *Plugin) Manifest() sdk.Manifest {
-	return sdk.Manifest{
-		Name:        "ftp",
-		Version:     "1.0.0",
-		Description: "FTP wire protocol inspector (RFC 959) detecting brute-force authentication failures and AUTH TLS handovers",
-		Author:      "RouteWarden Team",
-		Protocols:   []string{"ftp"},
-	}
+	return sdk.MustParseManifest(manifestYAML)
 }
 
 func (p *Plugin) ValidateConfig(config map[string]any) error {

@@ -24,7 +24,7 @@ jobs:
           echo "Verifying plugin directories..."
           FAIL=0
           for dir in */; do
-            if [ -d "$dir" ] && [ "$dir" != ".github/" ]; then
+            if [ -d "$dir" ] && [ "$dir" != ".github/" ] && [ "$dir" != "scripts/" ]; then
               plugin_name="${dir%/}"
               if [ ! -f "${plugin_name}/plugin.yaml" ]; then
                 echo "❌ Missing plugin.yaml in ${plugin_name}"
@@ -41,6 +41,10 @@ jobs:
             exit 1
           fi
           echo "✅ All plugins have valid metadata files."
+
+      - name: Verify Manifest Versions
+        run: |
+          ./scripts/update-manifest-version.sh --check
 
   test-plugins:
     name: Test Plugins (Go 1.25.1)

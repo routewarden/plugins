@@ -1,5 +1,6 @@
 name: tls_sni
 version: 1.0.0
+manifest_version: "1.0.0"
 description: Zero-decryption TLS ClientHello inspector extracting SNI domain names and enforcing domain allow/deny rules
 author: RouteWarden Team
 protocols:
@@ -11,3 +12,11 @@ config:
     - "api.internal"
   blocked_domains:
     - "*.malware.example"
+default_service:
+  listen: ":8443"
+  upstream: "127.0.0.1:443"
+  protocol: "tls"
+  rate_limit:
+    connections_per_minute: 120
+    burst: 20
+
