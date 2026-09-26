@@ -1,5 +1,6 @@
 name: mqtt
-version: 1.0.0
+version: "1.1.0"
+manifest_version: "1.0.0"
 description: Example custom RouteWarden plugin for IoT MQTT brokers (RFC / OASIS 3.1.1 and 5.0) with ClientID filtering and protocol anomaly detection
 author: Community Contributor
 protocols:
@@ -10,3 +11,11 @@ config:
     - "scanner-"
     - "shodan"
   max_client_id_len: 64
+default_service:
+  listen: ":1884"
+  upstream: "127.0.0.1:1883"
+  protocol: "mqtt"
+  rate_limit:
+    connections_per_minute: 60
+    burst: 10
+

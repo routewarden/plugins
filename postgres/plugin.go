@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	_ "embed"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -12,6 +13,9 @@ import (
 	"github.com/routewarden/tcp-warden/plugins/sdk"
 )
 
+//go:embed plugin.yaml
+var manifestYAML []byte
+
 func init() {
 	plugins.Register(&Plugin{})
 }
@@ -20,13 +24,7 @@ func init() {
 type Plugin struct{}
 
 func (p *Plugin) Manifest() sdk.Manifest {
-	return sdk.Manifest{
-		Name:        "postgres",
-		Version:     "1.0.0",
-		Description: "PostgreSQL wire protocol inspector with credential stuffing detection and SSL handling",
-		Author:      "RouteWarden Team",
-		Protocols:   []string{"postgres", "postgresql"},
-	}
+	return sdk.MustParseManifest(manifestYAML)
 }
 
 func (p *Plugin) ValidateConfig(config map[string]any) error {

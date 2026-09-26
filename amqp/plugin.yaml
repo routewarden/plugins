@@ -1,7 +1,16 @@
 name: amqp
-version: "1.0.0"
+version: "1.1.0"
+manifest_version: "1.0.0"
 description: "AMQP 0-9-1 (RabbitMQ) protocol inspector with auth failure detection and vhost filtering"
 author: "RouteWarden Team"
 protocols:
   - amqp
   - rabbitmq
+default_service:
+  listen: ":5673"
+  upstream: "127.0.0.1:5672"
+  protocol: "amqp"
+  rate_limit:
+    connections_per_minute: 60
+    burst: 10
+

@@ -2,6 +2,7 @@ package http
 
 import (
 	"bufio"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,9 @@ import (
 	"github.com/routewarden/tcp-warden/protocol"
 )
 
+//go:embed plugin.yaml
+var manifestYAML []byte
+
 func init() {
 	plugins.Register(&Plugin{})
 }
@@ -32,13 +36,7 @@ type HeaderRule struct {
 type Plugin struct{}
 
 func (p *Plugin) Manifest() sdk.Manifest {
-	return sdk.Manifest{
-		Name:        "http",
-		Version:     "1.0.0",
-		Description: "HTTP/1.x protocol inspector with Host header filtering, User-Agent blocking, path allowlists, and regex path/header blocking",
-		Author:      "RouteWarden Team",
-		Protocols:   []string{"http"},
-	}
+	return sdk.MustParseManifest(manifestYAML)
 }
 
 func (p *Plugin) ValidateConfig(config map[string]any) error {

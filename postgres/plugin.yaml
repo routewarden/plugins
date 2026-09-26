@@ -1,5 +1,6 @@
 name: postgres
-version: 1.0.0
+version: "1.1.0"
+manifest_version: "1.0.0"
 description: PostgreSQL wire protocol inspector with credential stuffing detection and SSL handling
 author: RouteWarden Team
 protocols:
@@ -7,3 +8,12 @@ protocols:
   - postgresql
 config:
   max_auth_failures: 5
+default_service:
+  listen: ":5433"
+  upstream: "127.0.0.1:5432"
+  protocol: "postgres"
+  rate_limit:
+    connections_per_minute: 60
+    burst: 10
+  max_auth_failures: 3
+  ban_after_failures: 3

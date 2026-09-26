@@ -1,6 +1,7 @@
 package echo_filter
 
 import (
+	_ "embed"
 	"errors"
 	"fmt"
 	"net"
@@ -11,6 +12,9 @@ import (
 	"github.com/routewarden/tcp-warden/plugins/sdk"
 )
 
+//go:embed plugin.yaml
+var manifestYAML []byte
+
 func init() {
 	plugins.Register(&Plugin{})
 }
@@ -19,13 +23,7 @@ func init() {
 type Plugin struct{}
 
 func (p *Plugin) Manifest() sdk.Manifest {
-	return sdk.Manifest{
-		Name:        "echo_filter",
-		Version:     "1.0.0",
-		Description: "Example custom RouteWarden plugin that scans client payloads for banned signature strings or exploit keywords",
-		Author:      "Community Contributor",
-		Protocols:   []string{"echo_filter", "text_filter"},
-	}
+	return sdk.MustParseManifest(manifestYAML)
 }
 
 func (p *Plugin) ValidateConfig(config map[string]any) error {

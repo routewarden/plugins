@@ -1,6 +1,7 @@
 package mongodb
 
 import (
+	_ "embed"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -15,6 +16,9 @@ import (
 	"github.com/routewarden/tcp-warden/plugins/sdk"
 )
 
+//go:embed plugin.yaml
+var manifestYAML []byte
+
 func init() {
 	plugins.Register(&Plugin{})
 }
@@ -23,13 +27,7 @@ func init() {
 type Plugin struct{}
 
 func (p *Plugin) Manifest() sdk.Manifest {
-	return sdk.Manifest{
-		Name:        "mongodb",
-		Version:     "1.0.0",
-		Description: "MongoDB wire protocol inspector with auth failure detection and op filtering",
-		Author:      "RouteWarden Team",
-		Protocols:   []string{"mongodb", "mongo"},
-	}
+	return sdk.MustParseManifest(manifestYAML)
 }
 
 func (p *Plugin) ValidateConfig(config map[string]any) error {

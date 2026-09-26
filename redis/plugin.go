@@ -1,6 +1,7 @@
 package redis
 
 import (
+	_ "embed"
 	"errors"
 	"fmt"
 	"net"
@@ -11,6 +12,9 @@ import (
 	"github.com/routewarden/tcp-warden/plugins/sdk"
 )
 
+//go:embed plugin.yaml
+var manifestYAML []byte
+
 func init() {
 	plugins.Register(&Plugin{})
 }
@@ -19,13 +23,7 @@ func init() {
 type Plugin struct{}
 
 func (p *Plugin) Manifest() sdk.Manifest {
-	return sdk.Manifest{
-		Name:        "redis",
-		Version:     "1.0.0",
-		Description: "Redis RESP wire protocol inspector with command filtering and credential stuffing detection",
-		Author:      "RouteWarden Team",
-		Protocols:   []string{"redis"},
-	}
+	return sdk.MustParseManifest(manifestYAML)
 }
 
 func (p *Plugin) ValidateConfig(config map[string]any) error {

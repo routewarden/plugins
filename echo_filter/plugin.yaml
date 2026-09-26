@@ -1,8 +1,10 @@
 name: echo_filter
-version: 1.0.0
+version: "1.1.0"
+manifest_version: "1.0.0"
 description: Example custom RouteWarden plugin that scans client payloads for banned signature strings or exploit keywords
 author: Community Contributor
 protocols:
+  - echo
   - echo_filter
   - text_filter
 config:
@@ -11,3 +13,11 @@ config:
     - "DROP TABLE"
     - "MALWARE"
     - "RCE_TEST"
+default_service:
+  listen: ":7001"
+  upstream: "127.0.0.1:7000"
+  protocol: "echo"
+  rate_limit:
+    connections_per_minute: 60
+    burst: 10
+

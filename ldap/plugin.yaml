@@ -1,6 +1,17 @@
 name: ldap
-version: "1.0.0"
+version: "1.1.0"
+manifest_version: "1.0.0"
 description: "LDAPv3 protocol inspector with bind auth failure detection and DN filtering"
 author: "RouteWarden Team"
 protocols:
   - ldap
+default_service:
+  listen: ":1390"
+  upstream: "127.0.0.1:389"
+  protocol: "ldap"
+  rate_limit:
+    connections_per_minute: 60
+    burst: 10
+  max_auth_failures: 3
+  ban_after_failures: 3
+

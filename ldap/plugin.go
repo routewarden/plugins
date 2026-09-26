@@ -1,6 +1,7 @@
 package ldap
 
 import (
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,9 @@ import (
 	"github.com/routewarden/tcp-warden/plugins/sdk"
 	"github.com/routewarden/tcp-warden/protocol"
 )
+
+//go:embed plugin.yaml
+var manifestYAML []byte
 
 func init() {
 	plugins.Register(&Plugin{})
@@ -39,13 +43,7 @@ const (
 type Plugin struct{}
 
 func (p *Plugin) Manifest() sdk.Manifest {
-	return sdk.Manifest{
-		Name:        "ldap",
-		Version:     "1.0.0",
-		Description: "LDAPv3 protocol inspector with bind auth failure detection and DN filtering",
-		Author:      "RouteWarden Team",
-		Protocols:   []string{"ldap"},
-	}
+	return sdk.MustParseManifest(manifestYAML)
 }
 
 func (p *Plugin) ValidateConfig(config map[string]any) error {
