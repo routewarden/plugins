@@ -1,6 +1,7 @@
 package minecraft
 
 import (
+	_ "embed"
 	"errors"
 	"net"
 	"time"
@@ -8,6 +9,9 @@ import (
 	"github.com/routewarden/tcp-warden/plugins"
 	"github.com/routewarden/tcp-warden/plugins/sdk"
 )
+
+//go:embed plugin.yaml
+var manifestYAML []byte
 
 func init() {
 	plugins.Register(&Plugin{})
@@ -17,13 +21,7 @@ func init() {
 type Plugin struct{}
 
 func (p *Plugin) Manifest() sdk.Manifest {
-	return sdk.Manifest{
-		Name:        "minecraft",
-		Version:     "1.0.0",
-		Description: "Minecraft Java Edition Server List Ping (SLP) & handshake inspector",
-		Author:      "RouteWarden Community",
-		Protocols:   []string{"minecraft", "mc"},
-	}
+	return sdk.MustParseManifest(manifestYAML)
 }
 
 func (p *Plugin) ValidateConfig(config map[string]any) error {

@@ -1,5 +1,6 @@
 name: minecraft
-version: 1.0.0
+version: "1.1.0"
+manifest_version: "1.0.0"
 description: Minecraft Java Edition Server List Ping (SLP) & handshake inspector
 author: RouteWarden Community
 protocols:
@@ -7,3 +8,11 @@ protocols:
   - mc
 config:
   max_connections_per_sec: 10
+default_service:
+  listen: ":25566"
+  upstream: "127.0.0.1:25565"
+  protocol: "minecraft"
+  rate_limit:
+    connections_per_minute: 30
+    burst: 5
+

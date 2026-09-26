@@ -2,6 +2,7 @@ package memcached
 
 import (
 	"bufio"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,9 @@ import (
 	"github.com/routewarden/tcp-warden/protocol"
 )
 
+//go:embed plugin.yaml
+var manifestYAML []byte
+
 func init() {
 	plugins.Register(&Plugin{})
 }
@@ -27,13 +31,7 @@ var defaultBlockedCommands = []string{"flush_all", "shutdown"}
 type Plugin struct{}
 
 func (p *Plugin) Manifest() sdk.Manifest {
-	return sdk.Manifest{
-		Name:        "memcached",
-		Version:     "1.0.0",
-		Description: "Memcached ASCII protocol inspector with dangerous command blocking (flush_all, shutdown, etc.)",
-		Author:      "RouteWarden Team",
-		Protocols:   []string{"memcached"},
-	}
+	return sdk.MustParseManifest(manifestYAML)
 }
 
 func (p *Plugin) ValidateConfig(config map[string]any) error {
