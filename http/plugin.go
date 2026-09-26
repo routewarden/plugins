@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,12 @@ func init() {
 	plugins.Register(&Plugin{})
 }
 
+// HeaderRule represents a compiled regex rule for checking an HTTP header.
+type HeaderRule struct {
+	Header  string
+	Pattern *regexp.Regexp
+}
+
 // Plugin implements sdk.Plugin for HTTP/1.x protocol inspection.
 type Plugin struct{}
 
@@ -28,7 +35,7 @@ func (p *Plugin) Manifest() sdk.Manifest {
 	return sdk.Manifest{
 		Name:        "http",
 		Version:     "1.0.0",
-		Description: "HTTP/1.x protocol inspector with Host header filtering, User-Agent blocking, and path allowlists",
+		Description: "HTTP/1.x protocol inspector with Host header filtering, User-Agent blocking, path allowlists, and regex path/header blocking",
 		Author:      "RouteWarden Team",
 		Protocols:   []string{"http"},
 	}
@@ -77,6 +84,71 @@ func (p *Plugin) ValidateConfig(config map[string]any) error {
 			return fmt.Errorf("allowed_paths must be a list of strings, got %T", v)
 		}
 	}
+	if v, exists := config["blocked_paths"]; exists {
+		var patterns []string
+		switch items := v.(type) {
+		case []string:
+			patterns = items
+		case []any:
+			for _, item := range items {
+				s, ok := item.(string)
+				if !ok {
+					return fmt.Errorf("blocked_paths must be a list of regex strings")
+				}
+				patterns = append(patterns, s)
+			}
+		default:
+			return fmt.Errorf("blocked_paths must be a list of regex strings, got %T", v)
+		}
+		for _, pat := range patterns {
+			if _, err := regexp.Compile(pat); err != nil {
+				return fmt.Errorf("invalid regex in blocked_paths %q: %w", pat, err)
+			}
+		}
+	}
+	if v, exists := config["blocked_headers"]; exists {
+		switch val := v.(type) {
+		case map[string]string:
+			for hdr, pat := range val {
+				if _, err := regexp.Compile(pat); err != nil {
+					return fmt.Errorf("invalid regex for blocked header %q (%q): %w", hdr, pat, err)
+				}
+			}
+		case map[string]any:
+			for hdr, raw := range val {
+				pat, ok := raw.(string)
+				if !ok {
+					return fmt.Errorf("pattern for blocked header %q must be a string", hdr)
+				}
+				if _, err := regexp.Compile(pat); err != nil {
+					return fmt.Errorf("invalid regex for blocked header %q (%q): %w", hdr, pat, err)
+				}
+			}
+		case []any:
+			for _, item := range val {
+				ruleMap, ok := item.(map[string]any)
+				if !ok {
+					return fmt.Errorf("each blocked_headers rule must be an object with 'header' and 'pattern'")
+				}
+				hdr, _ := ruleMap["header"].(string)
+				if hdr == "" {
+					hdr, _ = ruleMap["name"].(string)
+				}
+				pat, _ := ruleMap["pattern"].(string)
+				if pat == "" {
+					pat, _ = ruleMap["regex"].(string)
+				}
+				if hdr == "" || pat == "" {
+					return fmt.Errorf("blocked_headers list item must contain 'header' and 'pattern' strings")
+				}
+				if _, err := regexp.Compile(pat); err != nil {
+					return fmt.Errorf("invalid regex for blocked header %q (%q): %w", hdr, pat, err)
+				}
+			}
+		default:
+			return fmt.Errorf("blocked_headers must be a map or list of header regex rules, got %T", v)
+		}
+	}
 	return nil
 }
 
@@ -117,6 +189,70 @@ func (p *Plugin) CreateInspector(config map[string]any) (sdk.Inspector, error) {
 			for _, item := range items {
 				if s, ok := item.(string); ok {
 					insp.AllowedPaths = append(insp.AllowedPaths, s)
+				}
+			}
+		}
+	}
+	if v, ok := config["blocked_paths"]; ok {
+		var patterns []string
+		switch items := v.(type) {
+		case []string:
+			patterns = items
+		case []any:
+			for _, item := range items {
+				if s, ok := item.(string); ok {
+					patterns = append(patterns, s)
+				}
+			}
+		}
+		for _, pat := range patterns {
+			rx, err := regexp.Compile(pat)
+			if err == nil {
+				insp.BlockedPaths = append(insp.BlockedPaths, rx)
+			}
+		}
+	}
+	if v, ok := config["blocked_headers"]; ok {
+		switch val := v.(type) {
+		case map[string]string:
+			for hdr, pat := range val {
+				if rx, err := regexp.Compile(pat); err == nil {
+					insp.BlockedHeaders = append(insp.BlockedHeaders, HeaderRule{
+						Header:  hdr,
+						Pattern: rx,
+					})
+				}
+			}
+		case map[string]any:
+			for hdr, raw := range val {
+				if pat, ok := raw.(string); ok {
+					if rx, err := regexp.Compile(pat); err == nil {
+						insp.BlockedHeaders = append(insp.BlockedHeaders, HeaderRule{
+							Header:  hdr,
+							Pattern: rx,
+						})
+					}
+				}
+			}
+		case []any:
+			for _, item := range val {
+				if ruleMap, ok := item.(map[string]any); ok {
+					hdr, _ := ruleMap["header"].(string)
+					if hdr == "" {
+						hdr, _ = ruleMap["name"].(string)
+					}
+					pat, _ := ruleMap["pattern"].(string)
+					if pat == "" {
+						pat, _ = ruleMap["regex"].(string)
+					}
+					if hdr != "" && pat != "" {
+						if rx, err := regexp.Compile(pat); err == nil {
+							insp.BlockedHeaders = append(insp.BlockedHeaders, HeaderRule{
+								Header:  hdr,
+								Pattern: rx,
+							})
+						}
+					}
 				}
 			}
 		}
@@ -195,11 +331,13 @@ func (p *Plugin) SelfTest() error {
 	}
 }
 
-// Inspector filters HTTP/1.x traffic based on Host, User-Agent, and Request URI.
+// Inspector filters HTTP/1.x traffic based on Host, User-Agent, Request URI, and regex rules.
 type Inspector struct {
 	AllowedHosts      []string
 	BlockedUserAgents []string
 	AllowedPaths      []string
+	BlockedPaths      []*regexp.Regexp
+	BlockedHeaders    []HeaderRule
 }
 
 // Run processes HTTP/1.x requests from the client.
@@ -252,7 +390,7 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 			}
 		}
 
-		// 3. Check Request URI path
+		// 3. Check Request URI path allowlist
 		if len(insp.AllowedPaths) > 0 {
 			reqPath := req.URL.Path
 			if !isPathAllowed(reqPath, insp.AllowedPaths) {
@@ -261,6 +399,39 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 					ctx.OnSecurityEvent("blocked", "http_path_blocked_"+reqPath)
 				}
 				return result(nil), true, "blocked http path: " + reqPath, nil
+			}
+		}
+
+		// 4. Check Blocked Paths (Regex)
+		if len(insp.BlockedPaths) > 0 {
+			reqPath := req.URL.Path
+			for _, rx := range insp.BlockedPaths {
+				if rx.MatchString(reqPath) {
+					sendHTTPForbidden(client, "Path forbidden by RouteWarden\n")
+					if ctx != nil {
+						ctx.OnSecurityEvent("blocked", "http_path_blocked_"+reqPath)
+					}
+					return result(nil), true, "blocked http path regex: " + reqPath, nil
+				}
+			}
+		}
+
+		// 5. Check Blocked Headers (Regex)
+		if len(insp.BlockedHeaders) > 0 {
+			for _, rule := range insp.BlockedHeaders {
+				vals := req.Header.Values(rule.Header)
+				if len(vals) == 0 && strings.EqualFold(rule.Header, "Host") && req.Host != "" {
+					vals = []string{req.Host}
+				}
+				for _, val := range vals {
+					if rule.Pattern.MatchString(val) {
+						sendHTTPForbidden(client, "Header rejected by RouteWarden\n")
+						if ctx != nil {
+							ctx.OnSecurityEvent("blocked", "http_header_blocked_"+rule.Header)
+						}
+						return result(nil), true, fmt.Sprintf("blocked http header %s: %s", rule.Header, val), nil
+					}
+				}
 			}
 		}
 

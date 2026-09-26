@@ -101,3 +101,183 @@ func TestHTTP_BlockedHost(t *testing.T) {
 		t.Fatal("test timed out")
 	}
 }
+
+func TestHTTP_BlockedPathRegex(t *testing.T) {
+	p := &Plugin{}
+	rawInsp, err := p.CreateInspector(map[string]any{
+		"blocked_paths": []any{
+			`^/admin(/.*)?$`,
+			`\.(env|git|bak|sql)$`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed creating inspector: %v", err)
+	}
+
+	clientA, clientB := net.Pipe()
+	defer clientA.Close()
+	defer clientB.Close()
+
+	upA, upB := net.Pipe()
+	defer upA.Close()
+	defer upB.Close()
+
+	var securityAction, securityReason string
+	ctx := &sdk.DefaultContext{
+		SecurityFunc: func(action, reason string) {
+			securityAction = action
+			securityReason = reason
+		},
+	}
+
+	done := make(chan struct {
+		blocked bool
+		reason  string
+	}, 1)
+
+	go func() {
+		_, blocked, reason, _ := rawInsp.Run(ctx, clientB, upA)
+		done <- struct {
+			blocked bool
+			reason  string
+		}{blocked, reason}
+	}()
+
+	// Client sends request to /admin/settings
+	go func() {
+		_ = clientA.SetWriteDeadline(time.Now().Add(2 * time.Second))
+		req := "GET /admin/settings HTTP/1.1\r\nHost: example.com\r\n\r\n"
+		_, _ = clientA.Write([]byte(req))
+
+		var buf [512]byte
+		_ = clientA.SetReadDeadline(time.Now().Add(2 * time.Second))
+		n, _ := clientA.Read(buf[:])
+		_ = clientA.Close()
+
+		if !strings.Contains(string(buf[:n]), "403 Forbidden") {
+			t.Errorf("expected 403 Forbidden response, got: %s", string(buf[:n]))
+		}
+	}()
+
+	select {
+	case res := <-done:
+		if !res.blocked {
+			t.Errorf("expected path to be blocked, got blocked=false")
+		}
+		if securityAction != "blocked" {
+			t.Errorf("expected securityAction 'blocked', got %q", securityAction)
+		}
+		if !strings.Contains(securityReason, "/admin/settings") {
+			t.Errorf("expected securityReason to contain blocked path, got %q", securityReason)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("test timed out")
+	}
+}
+
+func TestHTTP_BlockedHeadersRegex(t *testing.T) {
+	p := &Plugin{}
+	rawInsp, err := p.CreateInspector(map[string]any{
+		"blocked_headers": map[string]any{
+			"X-Forwarded-Host": ".*",
+			"Authorization":    `(?i)^basic\s+.*`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed creating inspector: %v", err)
+	}
+
+	clientA, clientB := net.Pipe()
+	defer clientA.Close()
+	defer clientB.Close()
+
+	upA, upB := net.Pipe()
+	defer upA.Close()
+	defer upB.Close()
+
+	var securityAction, securityReason string
+	ctx := &sdk.DefaultContext{
+		SecurityFunc: func(action, reason string) {
+			securityAction = action
+			securityReason = reason
+		},
+	}
+
+	done := make(chan struct {
+		blocked bool
+		reason  string
+	}, 1)
+
+	go func() {
+		_, blocked, reason, _ := rawInsp.Run(ctx, clientB, upA)
+		done <- struct {
+			blocked bool
+			reason  string
+		}{blocked, reason}
+	}()
+
+	// Client sends request with disallowed Authorization header (Basic)
+	go func() {
+		_ = clientA.SetWriteDeadline(time.Now().Add(2 * time.Second))
+		req := "GET /api/data HTTP/1.1\r\nHost: example.com\r\nAuthorization: Basic dXNlcjpwYXNz\r\n\r\n"
+		_, _ = clientA.Write([]byte(req))
+
+		var buf [512]byte
+		_ = clientA.SetReadDeadline(time.Now().Add(2 * time.Second))
+		n, _ := clientA.Read(buf[:])
+		_ = clientA.Close()
+
+		if !strings.Contains(string(buf[:n]), "403 Forbidden") {
+			t.Errorf("expected 403 Forbidden response, got: %s", string(buf[:n]))
+		}
+	}()
+
+	select {
+	case res := <-done:
+		if !res.blocked {
+			t.Errorf("expected header to be blocked, got blocked=false")
+		}
+		if securityAction != "blocked" {
+			t.Errorf("expected securityAction 'blocked', got %q", securityAction)
+		}
+		if !strings.Contains(securityReason, "Authorization") {
+			t.Errorf("expected securityReason to contain blocked header name, got %q", securityReason)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("test timed out")
+	}
+}
+
+func TestHTTP_ValidateRegexConfig(t *testing.T) {
+	p := &Plugin{}
+
+	valid := map[string]any{
+		"blocked_paths": []any{
+			`^/admin(/.*)?$`,
+			`\.(env|git)$`,
+		},
+		"blocked_headers": map[string]any{
+			"User-Agent": `(?i)(sqlmap|nikto)`,
+			"X-Deny":     `.*`,
+		},
+	}
+	if err := p.ValidateConfig(valid); err != nil {
+		t.Fatalf("expected valid config, got: %v", err)
+	}
+
+	invalidPathRegex := map[string]any{
+		"blocked_paths": []any{`[invalid-regex`},
+	}
+	if err := p.ValidateConfig(invalidPathRegex); err == nil {
+		t.Fatal("expected error for invalid blocked_paths regex, got nil")
+	}
+
+	invalidHeaderRegex := map[string]any{
+		"blocked_headers": map[string]any{
+			"User-Agent": `[unclosed(`,
+		},
+	}
+	if err := p.ValidateConfig(invalidHeaderRegex); err == nil {
+		t.Fatal("expected error for invalid blocked_headers regex, got nil")
+	}
+}
