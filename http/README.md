@@ -67,3 +67,28 @@ services:
         - "sqlmap"
         - "nikto"
 ```
+
+### Port Range Deployments
+
+RouteWarden supports port ranges on the `http` inspector for clustered ingress or multi-port microservices:
+
+#### 1. Many-to-One Port Range
+Routes traffic from an entire range of ingress ports into a single backend HTTP service:
+```yaml
+services:
+  http-cluster:
+    listen: ":8080-8085"             # Listens on 8080, 8081, 8082, 8083, 8084, 8085
+    upstream: "127.0.0.1:80"         # All requests route to port 80
+    protocol: "http"
+```
+
+#### 2. 1:1 Port Range Mapping
+Maintains identical port offsets across upstream backend instances:
+```yaml
+services:
+  http-shards:
+    listen: ":9000-9003"             # Listens on 9000, 9001, 9002, 9003
+    upstream: "10.0.0.1:9000-9003"   # Port 9002 routes to 10.0.0.1:9002
+    protocol: "http"
+```
+
