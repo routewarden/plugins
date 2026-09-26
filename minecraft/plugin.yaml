@@ -1,0 +1,9 @@
+name: minecraft
+version: 1.0.0
+description: Minecraft Java Edition Server List Ping (SLP) & handshake inspector
+author: RouteWarden Community
+protocols:
+  - minecraft
+  - mc
+config:
+  max_connections_per_sec: 10

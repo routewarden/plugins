@@ -1,0 +1,7 @@
+name: vnc
+version: "1.0.0"
+description: "VNC/RFB protocol inspector with auth failure detection and version filtering"
+author: "RouteWarden Team"
+protocols:
+  - vnc
+  - rfb

@@ -1,0 +1,6 @@
+name: http
+version: "1.0.0"
+description: "HTTP/1.x protocol inspector with Host header filtering, User-Agent blocking, and path allowlists"
+author: "RouteWarden Team"
+protocols:
+  - http

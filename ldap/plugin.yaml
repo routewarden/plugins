@@ -1,0 +1,6 @@
+name: ldap
+version: "1.0.0"
+description: "LDAPv3 protocol inspector with bind auth failure detection and DN filtering"
+author: "RouteWarden Team"
+protocols:
+  - ldap

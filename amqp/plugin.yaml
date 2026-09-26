@@ -1,0 +1,7 @@
+name: amqp
+version: "1.0.0"
+description: "AMQP 0-9-1 (RabbitMQ) protocol inspector with auth failure detection and vhost filtering"
+author: "RouteWarden Team"
+protocols:
+  - amqp
+  - rabbitmq
