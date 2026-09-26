@@ -46,6 +46,10 @@ jobs:
         run: |
           ./scripts/update-manifest-version.sh --check
 
+      - name: Verify Plugin Versions
+        run: |
+          ./scripts/update-plugin-version.sh --check
+
   test-plugins:
     name: Test Plugins (Go 1.25.1)
     runs-on: ubuntu-latest
