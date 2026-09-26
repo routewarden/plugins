@@ -1,6 +1,7 @@
 package minecraft
 
 import (
+	"slices"
 	"bytes"
 	"fmt"
 	"io"
@@ -52,14 +53,12 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 			if err == nil && packetID == 0 && nLen+nID < n {
 				protoVer, _, err := readVarInt(buf[nLen+nID : n])
 				if err == nil {
-					for _, blocked := range insp.BlockedProtocolVersions {
-						if blocked == protoVer {
+					if slices.Contains(insp.BlockedProtocolVersions, protoVer) {
 							if ctx != nil {
 								ctx.OnSecurityEvent("blocked", fmt.Sprintf("minecraft_protocol_version_%d_blocked", protoVer))
 							}
 							return result(nil), true, fmt.Sprintf("blocked minecraft protocol version: %d", protoVer), nil
 						}
-					}
 				}
 			}
 		}
