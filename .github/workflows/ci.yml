@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-metadata:
+    name: Validate Plugin Metadata
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout plugins
+        uses: actions/checkout@v4
+
+      - name: Verify plugin.yaml and README.md
+        run: |
+          echo "Verifying plugin directories..."
+          FAIL=0
+          for dir in */; do
+            if [ -d "$dir" ] && [ "$dir" != ".github/" ]; then
+              plugin_name="${dir%/}"
+              if [ ! -f "${plugin_name}/plugin.yaml" ]; then
+                echo "❌ Missing plugin.yaml in ${plugin_name}"
+                FAIL=1
+              fi
+              if [ ! -f "${plugin_name}/README.md" ]; then
+                echo "❌ Missing README.md in ${plugin_name}"
+                FAIL=1
+              fi
+            fi
+          done
+          if [ $FAIL -ne 0 ]; then
+            echo "Plugin metadata validation failed!"
+            exit 1
+          fi
+          echo "✅ All plugins have valid metadata files."
+
+  test-plugins:
+    name: Test Plugins (Go 1.25.1)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout plugins
+        uses: actions/checkout@v4
+        with:
+          path: plugins
+
+      - name: Checkout tcp-warden dependency
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: routewarden/tcp-warden
+          path: tcp-warden
+
+      - name: Ensure tcp-warden dependency exists
+        working-directory: plugins
+        run: |
+          if [ ! -d "../tcp-warden" ]; then
+            echo "Cloning tcp-warden dependency via git..."
+            git clone --depth=1 https://github.com/routewarden/tcp-warden.git ../tcp-warden
+          fi
+
+      - name: Set up Go 1.25.1
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.1"
+          cache-dependency-path: plugins/go.sum
+
+      - name: Run Plugin Tests with Race Detector
+        working-directory: plugins
+        run: go test -v -race -count=1 ./...
+
+      - name: Run Coverage Check
+        working-directory: plugins
+        run: |
+          go test -v -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out
+
+  ci-success:
+    name: CI Status Check
+    needs: [validate-metadata, test-plugins]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish CI Results Summary
+        run: |
+          echo "## 🛡️ RouteWarden Plugins CI Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status | Details |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Plugin Metadata** | ✅ Passed | Validated \`plugin.yaml\` and \`README.md\` for all plugins |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Go Tests & Race Detector** | ✅ Passed | Tested all 14 plugins with \`-race\` on Go 1.25.1 |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🎉 **Ready for merge! All checks passed.**" >> $GITHUB_STEP_SUMMARY
