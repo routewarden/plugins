@@ -1,0 +1,16 @@
+name: generic
+version: "2.0.0"
+manifest_version: "1.0.0"
+description: "Generic Layer 4 TCP proxy guard with rate limiting, geo-blocking, and IP filtering for arbitrary TCP services"
+author: "RouteWarden Team"
+protocols:
+  - tcp
+  - generic
+  - raw
+default_service:
+  listen: ":15432"
+  upstream: "127.0.0.1:5432"
+  protocol: "tcp"
+  rate_limit:
+    connections_per_minute: 120
+    burst: 30
