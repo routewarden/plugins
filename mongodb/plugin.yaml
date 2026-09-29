@@ -1,5 +1,5 @@
 name: mongodb
-version: "1.1.0"
+version: "2.0.0"
 manifest_version: "1.0.0"
 description: "MongoDB wire protocol inspector with auth failure detection and op filtering"
 author: "RouteWarden Team"

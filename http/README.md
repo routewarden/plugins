@@ -1,31 +1,30 @@
-# RouteWarden HTTP/1.x Protocol Plugin
+# RouteWarden HTTP Protocol Plugin
 
-Standalone RouteWarden modular plugin for inspecting HTTP/1.x traffic with Host header filtering, regex path blocking, regex header blocking, malicious User-Agent blocking, path allowlists, and WebSocket upgrade tunneling.
+Standalone RouteWarden modular plugin for inspecting plain HTTP/1.x traffic at Layer 4/7, blocking vulnerability scanners (e.g. sqlmap, nikto, masscan), filtering sensitive paths (`.env`, `.git`, `.bak`), and preventing host header injection before traffic reaches your web server.
 
-## Protocols
-- `http`
+---
 
-## Features
-- **Host Header Verification**: Validates `Host` header against an allowlist, including wildcard subdomains (e.g. `*.example.com`).
-- **Path Blocking (Regex)**: Rejects requests whose path matches regular expressions (e.g. `^/admin(/.*)?$`, `\.(env|git|bak|sql)$`, directory traversal `\.\./`).
-- **Header Blocking (Regex)**: Filters any HTTP header against regular expression patterns (e.g. blocking scanner User-Agents, malicious Authorization schemes, or injection in Cookies).
-- **Malicious User-Agent Blocking**: Substring-based and regex-based scanner blocking (`sqlmap`, `nikto`, `masscan`, `nmap`).
-- **Path Allowlists**: Enforces URL path policies (e.g. allow only `/api/*`, `/health`), rejecting unauthorized endpoints with `403 Forbidden`.
-- **WebSocket Passthrough**: Automatically upgrades connections with `Upgrade: websocket` to raw bidirectional streaming.
-- **Keep-Alive Pipeline**: Supports HTTP keep-alive persistent connections with stream reuse.
+## Capabilities & Defenses
+
+- **HTTP/1.x Wire Parsing:** Inspects request line (`METHOD`, `URI`, `HTTP/1.1`) and initial header block.
+- **Scanner User-Agent Blocking:** Immediately drops or tarpits automated scanners matching regex patterns (`sqlmap`, `nikto`, `acunetix`, `masscan`, `nmap`).
+- **Sensitive Path & File Probing Protection:** Blocks path traversal and dotfile probes targeting `/.env`, `/.git`, `/wp-admin`, `.bak`, `.sql`.
+- **Auto-Ban & Tarpit:** Automatically bans IPs generating repeated malicious HTTP probes.
+
+---
 
 ## Installation
 
-### Via RouteWarden CLI
+### 1. Via RouteWarden CLI
 ```bash
-# From GitHub repository:
+# Install from official repository
 tcp-warden plugins install https://github.com/routewarden/plugins/http
 
-# Or from local clone:
-tcp-warden plugins install ../plugins/http
+# Or by short name
+tcp-warden plugins install http
 ```
 
-### Via Configuration (`tcp-warden.yaml`)
+### 2. Declarative Config (`tcp-warden.yaml`)
 ```yaml
 plugins:
   http:
@@ -33,62 +32,141 @@ plugins:
     source: "https://github.com/routewarden/plugins/http"
 
 services:
-  web-proxy:
-    listen: ":8080"
+  web-guard:
+    listen: ":8081"
     upstream: "127.0.0.1:80"
     protocol: "http"
+    rate_limit:
+      connections_per_minute: 120
+      burst: 20
+    ban_after_failures: 3
+    ban_duration: "1h"
     plugin_config:
-      # 1. Allowed host names (wildcard supported)
-      allowed_hosts:
-        - "api.example.com"
-        - "*.internal.corp"
-
-      # 2. Path blocking with Regular Expressions
       blocked_paths:
-        - "^/admin(/.*)?$"              # Block sensitive admin panels
-        - "\\.(env|git|bak|sql|yaml)$"  # Block sensitive file extensions
-        - "(?i)/actuator(/.*)?"         # Block Spring Boot Actuator endpoints
-        - "\\.\\./"                     # Block path traversal attempts
-
-      # 3. Path allowlist (prefix or exact match)
-      allowed_paths:
-        - "/api/*"
-        - "/health"
-
-      # 4. Header blocking with Regular Expressions (any header)
+        - "^/admin(/.*)?$"
+        - "\\.(env|git|bak|sql)$"
       blocked_headers:
-        User-Agent: "(?i)(sqlmap|nikto|acunetix|nessus|masscan|zgrab)"
-        X-Forwarded-Host: ".*"                  # Block untrusted reverse proxy headers
-        Authorization: "(?i)^basic\\s+.*"       # Disallow Basic Auth
-        Cookie: "(?i)(union.*select|<script)"   # Block SQLi/XSS in cookies
-
-      # 5. Simple blocked User-Agent substrings
-      blocked_user_agents:
-        - "sqlmap"
-        - "nikto"
+        User-Agent: "(?i)(sqlmap|nikto|acunetix|masscan)"
 ```
 
-### Port Range Deployments
+---
 
-RouteWarden supports port ranges on the `http` inspector for clustered ingress or multi-port microservices:
+## Network Integration Strategies
 
-#### 1. Many-to-One Port Range
-Routes traffic from an entire range of ingress ports into a single backend HTTP service:
+### Strategy 1: `nftables` Redirection (Recommended: Zero Web Server Changes)
+Keep Nginx / Apache / Caddy listening on standard port `80`. Divert external traffic on `eth0` to RouteWarden on port `8081`:
+
+```bash
+# 1. Create a NAT table
+sudo nft add table ip routewarden_nat
+
+# 2. Add the prerouting chain
+sudo nft add chain ip routewarden_nat prerouting '{ type nat hook prerouting priority dstnat; policy accept; }'
+
+# 3. Redirect external port 80 traffic to RouteWarden port 8081
+sudo nft add rule ip routewarden_nat prerouting iifname "eth0" tcp dport 80 redirect to :8081
+```
+
+---
+
+### Strategy 2: `iptables` Redirection (Zero Web Server Changes)
+```bash
+# Redirect incoming external traffic on port 80 to RouteWarden port 8081
+sudo iptables -t nat -A PREROUTING -i eth0 -p tcp --dport 80 -j REDIRECT --to-port 8081
+
+# Persist across reboots
+sudo netfilter-persistent save  # Debian / Ubuntu
+```
+
+---
+
+### Strategy 3: Direct Port Swap / Reverse Proxy (Requires Backend Changes)
+If you prefer RouteWarden to bind directly to `:80`:
+
+1. **Reconfigure Nginx / Apache / Caddy:**
+   In Nginx (`/etc/nginx/sites-available/default`):
+   ```nginx
+   server {
+       listen 127.0.0.1:8082;   # Move to internal loopback port
+       server_name example.com;
+       ...
+   }
+   ```
+2. **Reload Web Server:**
+   ```bash
+   sudo systemctl reload nginx
+   ```
+3. **Configure RouteWarden:**
+   In `tcp-warden.yaml`:
+   ```yaml
+   services:
+     web:
+       listen: ":80"
+       upstream: "127.0.0.1:8082"
+       protocol: "http"
+   ```
+
+---
+
+### Strategy 4: Docker Compose Network Isolation (Zero Host Exposure)
+Run the web application on a private Docker bridge network without publishing its port to the host:
+
 ```yaml
 services:
-  http-cluster:
-    listen: ":8080-8085"             # Listens on 8080, 8081, 8082, 8083, 8084, 8085
-    upstream: "127.0.0.1:80"         # All requests route to port 80
+  tcp-warden:
+    image: ghcr.io/routewarden/tcp-warden:latest
+    ports:
+      - "80:8081"       # Public port 80 -> RouteWarden 8081
+      - "9091:9091"     # Management API
+    volumes:
+      - ./tcp-warden.yaml:/etc/routewarden/tcp-warden.yaml:ro
+    networks:
+      - internal-net
+
+  web-backend:
+    image: nginx:alpine
+    # Notice: NO host ports exposed! Only accessible via tcp-warden
+    networks:
+      - internal-net
+
+networks:
+  internal-net:
+    driver: bridge
+```
+In `tcp-warden.yaml`:
+```yaml
+services:
+  http:
+    listen: ":8081"
+    upstream: "web-backend:80"
     protocol: "http"
 ```
 
-#### 2. 1:1 Port Range Mapping
-Maintains identical port offsets across upstream backend instances:
-```yaml
-services:
-  http-shards:
-    listen: ":9000-9003"             # Listens on 9000, 9001, 9002, 9003
-    upstream: "10.0.0.1:9000-9003"   # Port 9002 routes to 10.0.0.1:9002
-    protocol: "http"
+---
+
+## Client Connection Examples
+
+```bash
+# Legitimate request passes through transparently:
+curl http://localhost:8081/
+
+# Test with curl via proxy port
+curl -i http://localhost:8081/
 ```
 
+---
+
+## Attack Simulation & Verification
+
+```bash
+# 1. Probe a blocked sensitive path
+curl -i http://localhost:8081/.env
+# Output: 403 Forbidden / Connection dropped
+
+# 2. Probe with a scanner User-Agent
+curl -i -A "sqlmap/1.5" http://localhost:8081/
+# Output: Connection reset / 403 Forbidden
+
+# 3. Check active bans in RouteWarden
+tcp-warden banlist --api http://127.0.0.1:9091
+```
