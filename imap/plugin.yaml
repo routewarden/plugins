@@ -1,0 +1,17 @@
+name: imap
+version: "2.0.0"
+manifest_version: "1.0.0"
+description: "IMAP4rev1 mail retrieval protocol inspector with auth brute-force tracking (NO/BAD)"
+author: "RouteWarden Team"
+protocols:
+  - imap
+default_service:
+  listen: ":1143"
+  upstream: "127.0.0.1:143"
+  protocol: "imap"
+  rate_limit:
+    connections_per_minute: 20
+    burst: 5
+  max_auth_failures: 3
+  ban_after_failures: 3
+  ban_duration: "1h"

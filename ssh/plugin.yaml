@@ -1,0 +1,20 @@
+name: ssh
+version: "2.0.0"
+manifest_version: "1.0.0"
+description: "SSH protocol guard with banner validation, version checks, and SSH_MSG_USERAUTH_FAILURE brute-force detection"
+author: "RouteWarden Team"
+protocols:
+  - ssh
+config:
+  banner: "RouteWarden SSH Guard"
+  max_auth_tries: 3
+default_service:
+  listen: ":2222"
+  upstream: "127.0.0.1:22"
+  protocol: "ssh"
+  rate_limit:
+    connections_per_minute: 20
+    burst: 5
+  max_auth_failures: 3
+  ban_after_failures: 3
+  ban_duration: "1h"

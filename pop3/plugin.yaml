@@ -1,0 +1,17 @@
+name: pop3
+version: "2.0.0"
+manifest_version: "1.0.0"
+description: "POP3 mail retrieval protocol inspector with auth brute-force tracking (-ERR)"
+author: "RouteWarden Team"
+protocols:
+  - pop3
+default_service:
+  listen: ":1110"
+  upstream: "127.0.0.1:110"
+  protocol: "pop3"
+  rate_limit:
+    connections_per_minute: 20
+    burst: 5
+  max_auth_failures: 3
+  ban_after_failures: 3
+  ban_duration: "1h"
