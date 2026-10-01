@@ -28,6 +28,8 @@ The core `tcp-warden` binary provides high-performance transparent Layer 4 TCP p
 | **`vnc`** | `vnc`, `rfb` | `5900` / `5901` | VNC / RFB protocol inspector defending against automated remote desktop attacks | [Guide & Setup](./vnc) |
 | **`mqtt`** | `mqtt` | `1883` / `1884` | MQTT IoT broker security inspector with ClientID authorization and scanner blocking | [Guide & Setup](./mqtt) |
 | **`minecraft`** | `minecraft`, `mc` | `25565` / `25566` | Minecraft Java Server List Ping (SLP) DDoS and handshake flood protection | [Guide & Setup](./minecraft) |
+| **`dns`** | `dns` | `53` / `53` (TCP/UDP) | DNS dual-transport guard with domain blocklists (exact/wildcard) and amplification attack defense | [Guide & Setup](./dns) |
+| **`bittorrent`** | `bittorrent`, `bt` | `6881` / `6882` (TCP/UDP) | BitTorrent peer-wire, DHT, and uTP inspector with info-hash filtering, peer ID rules, and private tracker mode | [Guide & Setup](./bittorrent) |
 | **`echo_filter`** | `echo`, `stream-filter` | `7000` / `7001` | Example stream filter plugin demonstrating real-time signature and keyword filtering | [Guide & Setup](./echo_filter) |
 
 ---

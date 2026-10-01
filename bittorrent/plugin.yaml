@@ -1,0 +1,21 @@
+name: bittorrent
+version: "1.1.0"
+manifest_version: "1.0.0"
+description: BitTorrent protocol inspection for TCP (Peer Wire) and UDP (DHT + uTP). Supports per-info-hash filtering, peer ID controls, DHT method blocking, amplification protection, private-tracker mode, and extension enforcement.
+author: RouteWarden
+protocols:
+  - bittorrent
+  - bt
+config:
+  mode: inspect
+  block_dht: false
+  block_utp: false
+  max_dht_packet_size: 1500
+  require_peer_id_format: false
+default_service:
+  listen: ":6881"
+  upstream: "127.0.0.1:6882"
+  protocol: "bittorrent"
+  rate_limit:
+    connections_per_minute: 120
+    burst: 20
