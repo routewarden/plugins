@@ -1,0 +1,19 @@
+name: dns
+version: "1.0.0"
+manifest_version: "1.0.0"
+description: "DNS protocol inspection for both TCP and UDP transports. Supports domain blocklists and amplification protection."
+author: RouteWarden
+protocols:
+  - dns
+config:
+  blocked_domains:
+    - "malware.example.com"
+    - "*.ads.example.net"
+  max_packet_size: 4096
+default_service:
+  listen: ":53"
+  upstream: "1.1.1.1:53"
+  protocol: "dns"
+  rate_limit:
+    connections_per_minute: 120
+    burst: 20
