@@ -1,5 +1,5 @@
 name: tls_sni
-version: "2.0.0"
+version: "2.0.1"
 manifest_version: "1.0.0"
 description: Zero-decryption TLS ClientHello inspector extracting SNI domain names and enforcing domain allow/deny rules
 author: RouteWarden Team

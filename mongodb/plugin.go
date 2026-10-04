@@ -236,7 +236,6 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		if _, err := upstream.Write(full); err != nil {
 			return result(err), false, "", nil
 		}
-		bytesOut.Add(int64(len(full)))
 
 		// Read upstream response
 		upstream.SetReadDeadline(time.Now().Add(30 * time.Second))

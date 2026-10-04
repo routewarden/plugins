@@ -194,8 +194,8 @@ func extractSNI(data []byte) (string, error) {
 }
 
 func matchDomain(domain, pattern string) bool {
-	domain = strings.ToLower(strings.TrimSpace(domain))
-	pattern = strings.ToLower(strings.TrimSpace(pattern))
+	domain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
+	pattern = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(pattern), "."))
 	if pattern == "*" || pattern == domain {
 		return true
 	}

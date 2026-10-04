@@ -95,7 +95,6 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 	if _, err := upstream.Write(fullPacket); err != nil {
 		return result(err), false, "", err
 	}
-	bytesOut.Add(int64(len(fullPacket)))
 
 	client.SetDeadline(time.Time{})
 	upstream.SetDeadline(time.Time{})

@@ -63,7 +63,6 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		if _, err := upstream.Write(buf[:n]); err != nil {
 			return result(err), false, "", err
 		}
-		bytesOut.Add(int64(n))
 	}
 
 	client.SetDeadline(time.Time{})

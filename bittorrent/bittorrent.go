@@ -83,10 +83,11 @@ import (
 	"net"
 	"regexp"
 	"strings"
-	"sync"
+	"time"
 
 	"github.com/routewarden/tcp-warden/plugins"
 	"github.com/routewarden/tcp-warden/plugins/sdk"
+	"github.com/routewarden/tcp-warden/protocol"
 )
 
 //go:embed plugin.yaml
@@ -557,6 +558,8 @@ type btTCPInspector struct {
 func (i *btTCPInspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.ProxyResult, bool, string, error) {
 	var result sdk.ProxyResult
 
+	client.SetReadDeadline(time.Now().Add(10 * time.Second))
+
 	// Read exactly btHandshakeSize bytes from the client.
 	buf := make([]byte, btHandshakeSize)
 	n, err := io.ReadFull(client, buf)
@@ -567,9 +570,14 @@ func (i *btTCPInspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Pr
 
 	// Not a BT handshake — pass through transparently (e.g. HTTP on port 6881).
 	if !isBitTorrentHandshake(buf) {
-		written, _ := upstream.Write(buf)
+		written, err := upstream.Write(buf)
 		result.BytesIn += int64(written)
-		res := proxyTCP(client, upstream)
+		if err != nil {
+			return result, false, "", err
+		}
+		client.SetDeadline(time.Time{})
+		upstream.SetDeadline(time.Time{})
+		res := protocol.Proxy(client, upstream)
 		result.BytesIn += res.BytesIn
 		result.BytesOut = res.BytesOut
 		return result, false, "", res.Err
@@ -616,35 +624,12 @@ func (i *btTCPInspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Pr
 	if err != nil {
 		return result, false, "", err
 	}
-	res := proxyTCP(client, upstream)
+	client.SetDeadline(time.Time{})
+	upstream.SetDeadline(time.Time{})
+	res := protocol.Proxy(client, upstream)
 	result.BytesIn += res.BytesIn
 	result.BytesOut = res.BytesOut
 	return result, false, "", res.Err
-}
-
-func proxyTCP(client, upstream net.Conn) sdk.ProxyResult {
-	var result sdk.ProxyResult
-	var wg sync.WaitGroup
-	cp := func(dst, src net.Conn, counter *int64) {
-		defer wg.Done()
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := src.Read(buf)
-			if n > 0 {
-				w, _ := dst.Write(buf[:n])
-				*counter += int64(w)
-			}
-			if err != nil {
-				_ = dst.Close()
-				return
-			}
-		}
-	}
-	wg.Add(2)
-	go cp(upstream, client, &result.BytesIn)
-	go cp(client, upstream, &result.BytesOut)
-	wg.Wait()
-	return result
 }
 
 func sanitisePeerID(id string) string {
@@ -682,18 +667,33 @@ func extractDHTMessageType(data []byte) (msgType, methodName string) {
 		msgType = string(s[idx+5])
 	}
 	if msgType == "q" {
-		qi := strings.Index(s, "1:q")
-		if qi >= 0 && qi+4 < len(s) {
-			lenStart := qi + 3
-			lenEnd := strings.Index(s[lenStart:], ":") + lenStart
-			if lenEnd > lenStart {
-				var nameLen int
-				fmt.Sscanf(s[lenStart:lenEnd], "%d", &nameLen)
-				nameStart := lenEnd + 1
-				if nameStart+nameLen <= len(s) {
-					methodName = s[nameStart : nameStart+nameLen]
+		searchStart := 0
+		for {
+			qi := strings.Index(s[searchStart:], "1:q")
+			if qi < 0 {
+				break
+			}
+			actualQi := searchStart + qi
+			// If preceded by "1:y", this "1:q" is the value of "1:y1:q", not the key "1:q"
+			if actualQi >= 3 && s[actualQi-3:actualQi] == "1:y" {
+				searchStart = actualQi + 3
+				continue
+			}
+			if actualQi+4 < len(s) {
+				lenStart := actualQi + 3
+				colonOffset := strings.Index(s[lenStart:], ":")
+				if colonOffset > 0 {
+					lenEnd := lenStart + colonOffset
+					var nameLen int
+					if n, err := fmt.Sscanf(s[lenStart:lenEnd], "%d", &nameLen); n == 1 && err == nil {
+						nameStart := lenEnd + 1
+						if nameLen > 0 && nameLen <= 64 && nameStart+nameLen <= len(s) {
+							methodName = s[nameStart : nameStart+nameLen]
+						}
+					}
 				}
 			}
+			break
 		}
 	}
 	return msgType, methodName
@@ -742,6 +742,9 @@ func (i *btUDPInspector) InspectPacket(ctx sdk.Context, pkt *sdk.UDPPacket) (sdk
 
 	// Global block mode.
 	if i.opts.mode == modeBlock {
+		if ctx != nil {
+			ctx.OnSecurityEvent("blocked", "bt_blocked_by_policy")
+		}
 		return sdk.UDPVerdictDrop, "bt_blocked_by_policy", nil
 	}
 

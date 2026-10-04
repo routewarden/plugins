@@ -648,6 +648,59 @@ func TestBitTorrentPlugin_UDPManifestMatchesManifest(t *testing.T) {
 	}
 }
 
+func TestExtractDHTMessageType_MalformedNegativeLength(t *testing.T) {
+	// Malformed DHT packet with negative name length or overflow should not panic
+	malformed := []byte("d1:y1:q1:q-5:foobare")
+	msgType, method := extractDHTMessageType(malformed)
+	if msgType != "q" {
+		t.Errorf("msgType = %q, want q", msgType)
+	}
+	if method != "" {
+		t.Errorf("method = %q, want empty", method)
+	}
+
+	malformed2 := []byte("d1:y1:q1:q99999999:fooe")
+	_, method2 := extractDHTMessageType(malformed2)
+	if method2 != "" {
+		t.Errorf("method2 = %q, want empty", method2)
+	}
+}
+
+func TestBTUDPInspector_GlobalBlockSecurityEvent(t *testing.T) {
+	var eventFired bool
+	ctx := &sdk.DefaultContext{
+		Ctx:         context.Background(),
+		ServiceName: "bt-test",
+		SecurityFunc: func(action, reason string) {
+			if action == "blocked" && reason == "bt_blocked_by_policy" {
+				eventFired = true
+			}
+		},
+	}
+	p := &BitTorrentPlugin{}
+	insp, err := p.CreateUDPInspector(map[string]any{"mode": "block"})
+	if err != nil {
+		t.Fatalf("CreateUDPInspector: %v", err)
+	}
+	pkt := &sdk.UDPPacket{
+		Payload:    []byte("some-data"),
+		ClientAddr: &net.UDPAddr{IP: net.ParseIP("1.2.3.4"), Port: 1234},
+	}
+	verdict, reason, err := insp.InspectPacket(ctx, pkt)
+	if err != nil {
+		t.Fatalf("InspectPacket: %v", err)
+	}
+	if verdict != sdk.UDPVerdictDrop {
+		t.Errorf("verdict = %v, want Drop", verdict)
+	}
+	if reason != "bt_blocked_by_policy" {
+		t.Errorf("reason = %q, want bt_blocked_by_policy", reason)
+	}
+	if !eventFired {
+		t.Error("expected security event 'blocked' to be fired")
+	}
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func syntheticUTPPacket(typ byte) []byte {
