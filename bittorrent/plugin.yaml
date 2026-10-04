@@ -1,5 +1,5 @@
 name: bittorrent
-version: "1.1.0"
+version: "1.1.1"
 manifest_version: "1.0.0"
 description: BitTorrent protocol inspection for TCP (Peer Wire) and UDP (DHT + uTP). Supports per-info-hash filtering, peer ID controls, DHT method blocking, amplification protection, private-tracker mode, and extension enforcement.
 author: RouteWarden

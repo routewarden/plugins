@@ -31,12 +31,14 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
-	"sync"
+	"time"
 
 	"github.com/routewarden/tcp-warden/plugins"
 	"github.com/routewarden/tcp-warden/plugins/sdk"
+	"github.com/routewarden/tcp-warden/protocol"
 )
 
 //go:embed plugin.yaml
@@ -135,12 +137,13 @@ func parseOpts(config map[string]any) (dnsOptions, error) {
 }
 
 // isDomainBlocked checks whether qname matches any entry in the blocklist.
+// isDomainBlocked checks whether qname matches any entry in the blocklist.
 // Supports exact matches and wildcard prefixes (*.example.com).
 // A wildcard *.foo.com matches sub.foo.com and a.b.foo.com but NOT foo.com itself.
 func isDomainBlocked(qname string, blocked []string) bool {
-	qname = strings.ToLower(strings.TrimSuffix(qname, "."))
+	qname = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(qname), "."))
 	for _, pattern := range blocked {
-		pattern = strings.ToLower(pattern)
+		pattern = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(pattern), "."))
 		if strings.HasPrefix(pattern, "*.") {
 			// *.foo.com → suffix = ".foo.com"
 			// qname must end with ".foo.com" (i.e. be a proper subdomain).
@@ -171,21 +174,33 @@ func extractDNSQueryName(msg []byte) string {
 	// Parse first QNAME starting at byte 12.
 	pos := 12
 	var labels []string
+	totalLen := 0
+	terminated := false
+
 	for pos < len(msg) {
 		length := int(msg[pos])
 		if length == 0 {
+			terminated = true
 			break
 		}
-		// Pointer (compression) — not expected in questions, but guard against it.
-		if length&0xC0 == 0xC0 {
-			break
+		// Pointer (compression) or reserved bits set, or label > 63 (RFC 1035) -> malformed in query
+		if length&0xC0 != 0 || length > 63 {
+			return ""
 		}
 		pos++
 		if pos+length > len(msg) {
 			return ""
 		}
 		labels = append(labels, string(msg[pos:pos+length]))
+		totalLen += length + 1
+		if totalLen > 255 || len(labels) > 128 {
+			return ""
+		}
 		pos += length
+	}
+
+	if !terminated || len(labels) == 0 {
+		return ""
 	}
 	return strings.Join(labels, ".")
 }
@@ -194,7 +209,6 @@ func extractDNSQueryName(msg []byte) string {
 
 type dnsUDPInspector struct {
 	opts dnsOptions
-	mu   sync.Mutex
 }
 
 func (i *dnsUDPInspector) InspectPacket(ctx sdk.Context, pkt *sdk.UDPPacket) (sdk.UDPVerdict, string, error) {
@@ -235,9 +249,11 @@ func (i *dnsTCPInspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.P
 	// then proxy the rest of the stream transparently if allowed.
 	var result sdk.ProxyResult
 
+	client.SetReadDeadline(time.Now().Add(10 * time.Second))
+
 	// Read the 2-byte length prefix.
 	lenBuf := make([]byte, 2)
-	if _, err := readFull(client, lenBuf); err != nil {
+	if _, err := io.ReadFull(client, lenBuf); err != nil {
 		return result, false, "", err
 	}
 	msgLen := int(binary.BigEndian.Uint16(lenBuf))
@@ -245,8 +261,13 @@ func (i *dnsTCPInspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.P
 		return result, false, "", errors.New("dns-tcp: zero-length message")
 	}
 
+	if i.opts.maxPacketSize > 0 && msgLen > i.opts.maxPacketSize {
+		ctx.OnSecurityEvent("blocked", fmt.Sprintf("dns_packet_too_large: %d bytes", msgLen))
+		return result, true, fmt.Sprintf("dns_packet_too_large: %d bytes", msgLen), nil
+	}
+
 	msgBuf := make([]byte, msgLen)
-	if _, err := readFull(client, msgBuf); err != nil {
+	if _, err := io.ReadFull(client, msgBuf); err != nil {
 		return result, false, "", err
 	}
 
@@ -267,51 +288,12 @@ func (i *dnsTCPInspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.P
 		return result, false, "", err
 	}
 
+	client.SetDeadline(time.Time{})
+	upstream.SetDeadline(time.Time{})
+
 	// Proxy remainder of the session transparently.
-	res := proxyStreams(client, upstream)
+	res := protocol.Proxy(client, upstream)
 	result.BytesIn += res.BytesIn
 	result.BytesOut = res.BytesOut
 	return result, false, "", res.Err
-}
-
-// readFull reads exactly len(buf) bytes from r, returning an error on short reads.
-func readFull(r net.Conn, buf []byte) (int, error) {
-	total := 0
-	for total < len(buf) {
-		n, err := r.Read(buf[total:])
-		total += n
-		if err != nil {
-			return total, err
-		}
-	}
-	return total, nil
-}
-
-// proxyStreams copies data bidirectionally between client and upstream,
-// returning aggregate byte counts and the first error (if any).
-func proxyStreams(client, upstream net.Conn) sdk.ProxyResult {
-	var result sdk.ProxyResult
-	var wg sync.WaitGroup
-
-	copy := func(dst, src net.Conn, counter *int64) {
-		defer wg.Done()
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := src.Read(buf)
-			if n > 0 {
-				written, _ := dst.Write(buf[:n])
-				*counter += int64(written)
-			}
-			if err != nil {
-				_ = dst.Close()
-				return
-			}
-		}
-	}
-
-	wg.Add(2)
-	go copy(upstream, client, &result.BytesIn)
-	go copy(client, upstream, &result.BytesOut)
-	wg.Wait()
-	return result
 }

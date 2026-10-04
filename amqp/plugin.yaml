@@ -1,5 +1,5 @@
 name: amqp
-version: "2.0.0"
+version: "2.0.1"
 manifest_version: "1.0.0"
 description: "AMQP 0-9-1 (RabbitMQ) protocol inspector with auth failure detection and vhost filtering"
 author: "RouteWarden Team"

@@ -59,7 +59,6 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 			if _, err := upstream.Write(append(lenBuf[:], payload...)); err != nil {
 				return result(err), true, "failed writing SSLRequest to upstream: " + err.Error(), err
 			}
-			bytesOut.Add(int64(4 + len(payload)))
 
 			// Upstream replies with single byte: 'S' (SSL ok) or 'N' (no SSL)
 			var resp [1]byte
@@ -67,6 +66,7 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 			if _, err := io.ReadFull(upstream, resp[:]); err != nil {
 				return result(err), true, "failed reading SSL response from upstream: " + err.Error(), err
 			}
+			bytesOut.Add(1)
 			if _, err := client.Write(resp[:]); err != nil {
 				return result(err), false, "", err
 			}
@@ -88,7 +88,6 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		if _, err := upstream.Write(append(lenBuf[:], payload...)); err != nil {
 			return result(err), true, "failed writing StartupMessage to upstream: " + err.Error(), err
 		}
-		bytesOut.Add(int64(4 + len(payload)))
 		break
 	}
 
