@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/routewarden/tcp-warden/plugins/sdk"
 )
@@ -278,3 +279,71 @@ func noopCtx() sdk.Context {
 		ServiceName: "dns-test",
 	}
 }
+
+func TestIsDomainBlocked_TrailingDots(t *testing.T) {
+	blocked := []string{"malware.example.com.", "*.ads.example.com."}
+	if !isDomainBlocked("malware.example.com", blocked) {
+		t.Error("expected malware.example.com to match blocked rule with trailing dot")
+	}
+	if !isDomainBlocked("malware.example.com.", blocked) {
+		t.Error("expected malware.example.com. with trailing dot to match blocked rule")
+	}
+	if !isDomainBlocked("sub.ads.example.com.", blocked) {
+		t.Error("expected sub.ads.example.com. with trailing dot to match wildcard rule")
+	}
+}
+
+func TestExtractDNSQueryName_Malformed(t *testing.T) {
+	// Label length > 63
+	msg := []byte{
+		0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		64, // length > 63
+	}
+	if got := extractDNSQueryName(msg); got != "" {
+		t.Errorf("extractDNSQueryName(length=64) = %q, want empty", got)
+	}
+
+	// Unterminated query (never hits length 0)
+	msg2 := []byte{
+		0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x04, 't', 'e', 's', 't',
+	}
+	if got := extractDNSQueryName(msg2); got != "" {
+		t.Errorf("extractDNSQueryName(unterminated) = %q, want empty", got)
+	}
+}
+
+func TestDNSTCPInspector_OversizedPacket(t *testing.T) {
+	clientA, clientB := net.Pipe()
+	defer clientA.Close()
+	defer clientB.Close()
+
+	upA, upB := net.Pipe()
+	defer upA.Close()
+	defer upB.Close()
+
+	p := &DNSPlugin{}
+	insp, err := p.CreateInspector(map[string]any{"max_packet_size": 512})
+	if err != nil {
+		t.Fatalf("CreateInspector: %v", err)
+	}
+
+	done := make(chan bool, 1)
+	go func() {
+		_, blocked, _, _ := insp.Run(noopCtx(), clientB, upA)
+		done <- blocked
+	}()
+
+	// Send 2-byte length prefix of 1000 bytes (> 512 max)
+	_, _ = clientA.Write([]byte{0x03, 0xE8})
+
+	select {
+	case blocked := <-done:
+		if !blocked {
+			t.Error("expected oversized TCP packet to be blocked")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for inspector")
+	}
+}
+

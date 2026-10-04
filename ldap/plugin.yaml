@@ -1,5 +1,5 @@
 name: ldap
-version: "2.0.0"
+version: "2.0.1"
 manifest_version: "1.0.0"
 description: "LDAPv3 protocol inspector with bind auth failure detection and DN filtering"
 author: "RouteWarden Team"

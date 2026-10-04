@@ -232,7 +232,6 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 	if _, err := upstream.Write(protoHeader[:]); err != nil {
 		return result(err), true, "failed forwarding AMQP protocol header", err
 	}
-	bytesOut.Add(8)
 
 	// 2. Inspect handshake frames until Connection.Open-Ok or Connection.Close
 	for {

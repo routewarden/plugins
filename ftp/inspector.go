@@ -75,7 +75,9 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 			if strings.HasPrefix(serverResp, "234") {
 				client.SetDeadline(time.Time{})
 				upstream.SetDeadline(time.Time{})
-				proxyRes := protocol.Proxy(client, upstream)
+				clientBuffered := &protocol.BufferedConn{Reader: clientReader, Conn: client}
+				upstreamBuffered := &protocol.BufferedConn{Reader: upstreamReader, Conn: upstream}
+				proxyRes := protocol.Proxy(clientBuffered, upstreamBuffered)
 				bytesIn.Add(proxyRes.BytesIn)
 				bytesOut.Add(proxyRes.BytesOut)
 				return result(nil), false, "", nil

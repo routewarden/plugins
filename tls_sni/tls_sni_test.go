@@ -31,3 +31,16 @@ func TestTLSSNIPlugin_ManifestAndConfig(t *testing.T) {
 		t.Fatalf("failed creating inspector: %v", err)
 	}
 }
+
+func TestMatchDomain_TrailingDots(t *testing.T) {
+	if !matchDomain("example.com.", "*.example.com") {
+		t.Error("expected example.com. with trailing dot to match *.example.com")
+	}
+	if !matchDomain("sub.example.com.", "*.example.com.") {
+		t.Error("expected sub.example.com. to match *.example.com.")
+	}
+	if !matchDomain("foo.bar.com", "foo.bar.com.") {
+		t.Error("expected foo.bar.com to match foo.bar.com.")
+	}
+}
+
