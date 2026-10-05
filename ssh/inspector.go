@@ -41,7 +41,12 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 	})
 	monitoredUpstream := monitor.WrapUpstream(upstream)
 
-	// 3. Wrap client connection to preserve peeked banner bytes
+	// Forward the inspected client banner to upstream
+	if _, err := upstream.Write([]byte(res.RawBanner)); err != nil {
+		return sdk.ProxyResult{}, false, "", err
+	}
+
+	// 3. Wrap client connection to preserve any extra bytes buffered during banner reading
 	bufferedClient := &protocol.BufferedConn{
 		Reader: br,
 		Conn:   client,
@@ -51,7 +56,7 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 	proxyRes := protocol.Proxy(bufferedClient, monitoredUpstream)
 
 	return sdk.ProxyResult{
-		BytesIn:  proxyRes.BytesIn,
+		BytesIn:  proxyRes.BytesIn + int64(len(res.RawBanner)),
 		BytesOut: proxyRes.BytesOut,
 		Err:      proxyRes.Err,
 	}, false, "", proxyRes.Err
@@ -59,6 +64,7 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 
 type sshResult struct {
 	ClientVersion string
+	RawBanner     string
 	IsSSH1        bool
 	Valid         bool
 }
@@ -68,14 +74,15 @@ func inspectSSHBanner(conn net.Conn) (*bufio.Reader, sshResult) {
 	defer conn.SetReadDeadline(time.Time{})
 
 	br := bufio.NewReader(conn)
-	line, err := br.ReadString('\n')
+	rawLine, err := br.ReadString('\n')
 	if err != nil {
 		return br, sshResult{}
 	}
-	line = strings.TrimSpace(line)
+	line := strings.TrimSpace(rawLine)
 
 	result := sshResult{
 		ClientVersion: line,
+		RawBanner:     rawLine,
 		Valid:         strings.HasPrefix(line, "SSH-"),
 	}
 	if strings.HasPrefix(line, "SSH-1.") {
