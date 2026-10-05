@@ -104,8 +104,12 @@ func (p *Plugin) SelfTest() error {
 		}
 	}()
 
-	// Synthetic upstream server sends SSH banner, then SSH_MSG_USERAUTH_FAILURE (type 51)
+	// Synthetic upstream server reads client banner, sends SSH banner, then SSH_MSG_USERAUTH_FAILURE (type 51)
 	go func() {
+		var clientBannerBuf [256]byte
+		_ = upB.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, _ = upB.Read(clientBannerBuf[:])
+
 		_ = upB.SetWriteDeadline(time.Now().Add(2 * time.Second))
 		_, _ = upB.Write([]byte("SSH-2.0-RouteWarden_Test\r\n"))
 

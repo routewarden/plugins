@@ -1,7 +1,6 @@
 package echo_filter
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"net"
@@ -68,14 +67,9 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 	client.SetDeadline(time.Time{})
 	upstream.SetDeadline(time.Time{})
 
-	bufferedClient := &protocol.BufferedConn{
-		Reader: bytes.NewReader(nil),
-		Conn:   client,
-	}
-
-	proxyRes := protocol.Proxy(bufferedClient, upstream)
+	proxyRes := protocol.Proxy(client, upstream)
 	bytesIn.Add(proxyRes.BytesIn)
 	bytesOut.Add(proxyRes.BytesOut)
 
-	return result(proxyRes.Err), false, "", nil
+	return result(proxyRes.Err), false, "", proxyRes.Err
 }

@@ -79,6 +79,79 @@ func TestExtractDNSQueryName_NoQuestions(t *testing.T) {
 	}
 }
 
+func TestExtractDNSQueryNames_MultiQuestion(t *testing.T) {
+	// Build packet with QDCOUNT = 2: "safe.example.com" and "malware.example.com"
+	header := []byte{
+		0x12, 0x34, // ID
+		0x01, 0x00, // standard query
+		0x00, 0x02, // QDCOUNT = 2
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	}
+
+	q1 := []byte{
+		4, 's', 'a', 'f', 'e',
+		7, 'e', 'x', 'a', 'm', 'p', 'l', 'e',
+		3, 'c', 'o', 'm',
+		0,
+		0, 1, 0, 1, // QTYPE=A, QCLASS=IN
+	}
+
+	q2 := []byte{
+		7, 'm', 'a', 'l', 'w', 'a', 'r', 'e',
+		7, 'e', 'x', 'a', 'm', 'p', 'l', 'e',
+		3, 'c', 'o', 'm',
+		0,
+		0, 1, 0, 1, // QTYPE=A, QCLASS=IN
+	}
+
+	msg := append(append(header, q1...), q2...)
+	names := extractDNSQueryNames(msg)
+	if len(names) != 2 {
+		t.Fatalf("expected 2 names, got %d: %v", len(names), names)
+	}
+	if names[0] != "safe.example.com" || names[1] != "malware.example.com" {
+		t.Errorf("unexpected names: %v", names)
+	}
+}
+
+func TestDNSUDPInspector_MultiQuestionBlock(t *testing.T) {
+	p := &DNSPlugin{}
+	insp, err := p.CreateUDPInspector(map[string]any{
+		"blocked_domains": []string{"malware.example.com"},
+	})
+	if err != nil {
+		t.Fatalf("CreateUDPInspector: %v", err)
+	}
+	defer insp.Close()
+
+	header := []byte{
+		0x12, 0x34,
+		0x01, 0x00,
+		0x00, 0x02, // 2 questions
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	}
+	q1 := []byte{4, 's', 'a', 'f', 'e', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0, 1, 0, 1}
+	q2 := []byte{7, 'm', 'a', 'l', 'w', 'a', 'r', 'e', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0, 1, 0, 1}
+	payload := append(append(header, q1...), q2...)
+
+	pkt := &sdk.UDPPacket{
+		Payload:    payload,
+		ClientAddr: &net.UDPAddr{IP: net.ParseIP("1.2.3.4"), Port: 53},
+		IsReply:    false,
+	}
+
+	verdict, reason, err := insp.InspectPacket(noopCtx(), pkt)
+	if err != nil {
+		t.Fatalf("InspectPacket: %v", err)
+	}
+	if verdict != sdk.UDPVerdictDrop {
+		t.Errorf("expected drop for packet with second question blocked, got verdict=%v", verdict)
+	}
+	if reason != "dns_blocked_domain: malware.example.com" {
+		t.Errorf("unexpected reason: %s", reason)
+	}
+}
+
 // ── UDPInspector tests ────────────────────────────────────────────────────────
 
 func TestDNSUDPInspector_AllowCleanQuery(t *testing.T) {

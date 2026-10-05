@@ -160,49 +160,67 @@ func isDomainBlocked(qname string, blocked []string) bool {
 	return false
 }
 
-// extractDNSQueryName parses the QNAME from a raw DNS message (wire format).
+// extractDNSQueryName parses the first QNAME from a raw DNS message (wire format).
 // Returns "" if the message is malformed.
 func extractDNSQueryName(msg []byte) string {
-	// DNS header is 12 bytes; QDCOUNT is at offset 4 (2 bytes).
-	if len(msg) < 13 {
-		return ""
+	names := extractDNSQueryNames(msg)
+	if len(names) > 0 {
+		return names[0]
 	}
-	qdcount := binary.BigEndian.Uint16(msg[4:6])
-	if qdcount == 0 {
-		return ""
-	}
-	// Parse first QNAME starting at byte 12.
-	pos := 12
-	var labels []string
-	totalLen := 0
-	terminated := false
+	return ""
+}
 
-	for pos < len(msg) {
-		length := int(msg[pos])
-		if length == 0 {
-			terminated = true
+// extractDNSQueryNames parses all QNAMEs for all questions (QDCOUNT) in a DNS message.
+func extractDNSQueryNames(msg []byte) []string {
+	// DNS header is 12 bytes; QDCOUNT is at offset 4 (2 bytes).
+	if len(msg) < 12 {
+		return nil
+	}
+	qdcount := int(binary.BigEndian.Uint16(msg[4:6]))
+	if qdcount == 0 {
+		return nil
+	}
+	pos := 12
+	var names []string
+
+	for q := 0; q < qdcount && pos < len(msg); q++ {
+		var labels []string
+		totalLen := 0
+		terminated := false
+
+		for pos < len(msg) {
+			length := int(msg[pos])
+			if length == 0 {
+				terminated = true
+				pos++
+				break
+			}
+			// Pointer (compression) or reserved bits set, or label > 63 (RFC 1035) -> malformed in query
+			if length&0xC0 != 0 || length > 63 {
+				return names
+			}
+			pos++
+			if pos+length > len(msg) {
+				return names
+			}
+			labels = append(labels, string(msg[pos:pos+length]))
+			totalLen += length + 1
+			if totalLen > 255 || len(labels) > 128 {
+				return names
+			}
+			pos += length
+		}
+
+		if !terminated || len(labels) == 0 {
 			break
 		}
-		// Pointer (compression) or reserved bits set, or label > 63 (RFC 1035) -> malformed in query
-		if length&0xC0 != 0 || length > 63 {
-			return ""
-		}
-		pos++
-		if pos+length > len(msg) {
-			return ""
-		}
-		labels = append(labels, string(msg[pos:pos+length]))
-		totalLen += length + 1
-		if totalLen > 255 || len(labels) > 128 {
-			return ""
-		}
-		pos += length
+		names = append(names, strings.Join(labels, "."))
+
+		// Skip QTYPE (2 bytes) and QCLASS (2 bytes)
+		pos += 4
 	}
 
-	if !terminated || len(labels) == 0 {
-		return ""
-	}
-	return strings.Join(labels, ".")
+	return names
 }
 
 // ── DNS-over-UDP Inspector ────────────────────────────────────────────────────
@@ -219,15 +237,22 @@ func (i *dnsUDPInspector) InspectPacket(ctx sdk.Context, pkt *sdk.UDPPacket) (sd
 
 	// 1. Packet size guard (amplification protection).
 	if i.opts.maxPacketSize > 0 && len(pkt.Payload) > i.opts.maxPacketSize {
+		if ctx != nil {
+			ctx.OnSecurityEvent("blocked", fmt.Sprintf("dns_packet_too_large: %d bytes", len(pkt.Payload)))
+		}
 		return sdk.UDPVerdictDrop, fmt.Sprintf("dns_packet_too_large: %d bytes", len(pkt.Payload)), nil
 	}
 
 	// 2. Domain blocklist.
 	if len(i.opts.blockedDomains) > 0 {
-		qname := extractDNSQueryName(pkt.Payload)
-		if qname != "" && isDomainBlocked(qname, i.opts.blockedDomains) {
-			ctx.OnSecurityEvent("blocked", fmt.Sprintf("dns_blocked_domain: %s", qname))
-			return sdk.UDPVerdictDrop, fmt.Sprintf("dns_blocked_domain: %s", qname), nil
+		qnames := extractDNSQueryNames(pkt.Payload)
+		for _, qname := range qnames {
+			if isDomainBlocked(qname, i.opts.blockedDomains) {
+				if ctx != nil {
+					ctx.OnSecurityEvent("blocked", fmt.Sprintf("dns_blocked_domain: %s", qname))
+				}
+				return sdk.UDPVerdictDrop, fmt.Sprintf("dns_blocked_domain: %s", qname), nil
+			}
 		}
 	}
 
@@ -262,7 +287,9 @@ func (i *dnsTCPInspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.P
 	}
 
 	if i.opts.maxPacketSize > 0 && msgLen > i.opts.maxPacketSize {
-		ctx.OnSecurityEvent("blocked", fmt.Sprintf("dns_packet_too_large: %d bytes", msgLen))
+		if ctx != nil {
+			ctx.OnSecurityEvent("blocked", fmt.Sprintf("dns_packet_too_large: %d bytes", msgLen))
+		}
 		return result, true, fmt.Sprintf("dns_packet_too_large: %d bytes", msgLen), nil
 	}
 
@@ -273,10 +300,14 @@ func (i *dnsTCPInspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.P
 
 	// Check domain blocklist.
 	if len(i.opts.blockedDomains) > 0 {
-		qname := extractDNSQueryName(msgBuf)
-		if qname != "" && isDomainBlocked(qname, i.opts.blockedDomains) {
-			ctx.OnSecurityEvent("blocked", fmt.Sprintf("dns_blocked_domain: %s", qname))
-			return result, true, fmt.Sprintf("dns_blocked_domain: %s", qname), nil
+		qnames := extractDNSQueryNames(msgBuf)
+		for _, qname := range qnames {
+			if isDomainBlocked(qname, i.opts.blockedDomains) {
+				if ctx != nil {
+					ctx.OnSecurityEvent("blocked", fmt.Sprintf("dns_blocked_domain: %s", qname))
+				}
+				return result, true, fmt.Sprintf("dns_blocked_domain: %s", qname), nil
+			}
 		}
 	}
 
