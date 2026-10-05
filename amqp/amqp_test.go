@@ -118,3 +118,151 @@ func TestAMQP_VHostBlocked(t *testing.T) {
 		t.Error("test timed out")
 	}
 }
+
+func TestAMQP_InvalidProtocolHeader(t *testing.T) {
+	clientA, clientB := net.Pipe()
+	defer clientA.Close()
+	defer clientB.Close()
+
+	upA, upB := net.Pipe()
+	defer upA.Close()
+	defer upB.Close()
+
+	insp := &Inspector{}
+	done := make(chan struct {
+		blocked bool
+		reason  string
+	}, 1)
+
+	go func() {
+		_, blocked, reason, _ := insp.Run(nil, clientB, upA)
+		done <- struct {
+			blocked bool
+			reason  string
+		}{blocked, reason}
+	}()
+
+	// Client sends invalid protocol header
+	go func() {
+		_ = clientA.SetWriteDeadline(time.Now().Add(2 * time.Second))
+		_, _ = clientA.Write([]byte("HTTP/1.1"))
+	}()
+
+	select {
+	case res := <-done:
+		if !res.blocked {
+			t.Errorf("expected blocked=true for invalid AMQP header, got %v", res.blocked)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("test timed out")
+	}
+}
+
+func TestAMQP_AllowedVHostAndProxy(t *testing.T) {
+	clientA, clientB := net.Pipe()
+	defer clientA.Close()
+	defer clientB.Close()
+
+	upA, upB := net.Pipe()
+	defer upA.Close()
+	defer upB.Close()
+
+	insp := &Inspector{AllowedVHosts: []string{"/prod"}}
+	done := make(chan struct {
+		blocked bool
+	}, 1)
+
+	go func() {
+		_, blocked, _, _ := insp.Run(nil, clientB, upA)
+		done <- struct {
+			blocked bool
+		}{blocked}
+	}()
+
+	// Upstream server mock
+	go func() {
+		var hdr [8]byte
+		_ = upB.SetDeadline(time.Now().Add(3 * time.Second))
+		if _, err := io.ReadFull(upB, hdr[:]); err != nil {
+			return
+		}
+		// Send Connection.Start
+		_, _ = upB.Write(buildConnectionStart())
+
+		// Read Start-Ok
+		if _, err := readAMQPFrame(upB); err != nil {
+			return
+		}
+
+		// Send Connection.Tune
+		tunePayload := []byte{0x00, 0x0A, 0x00, 0x1E, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x3C}
+		tuneFrame := buildAMQPFrame(frameMethod, 0, tunePayload)
+		_, _ = upB.Write(tuneFrame)
+
+		// Read Tune-Ok
+		if _, err := readAMQPFrame(upB); err != nil {
+			return
+		}
+
+		// Read Connection.Open
+		if _, err := readAMQPFrame(upB); err != nil {
+			return
+		}
+
+		// Send Connection.Open-Ok (class 10, method 41 = 0x0029)
+		openOkPayload := []byte{0x00, 0x0A, 0x00, 0x29, 0x00}
+		openOkFrame := buildAMQPFrame(frameMethod, 0, openOkPayload)
+		_, _ = upB.Write(openOkFrame)
+
+		// Post-handshake proxy test
+		buf := make([]byte, 4)
+		if _, err := io.ReadFull(upB, buf); err == nil && string(buf) == "PING" {
+			_, _ = upB.Write([]byte("PONG"))
+		}
+		_ = upB.Close()
+	}()
+
+	// Client mock
+	go func() {
+		_ = clientA.SetDeadline(time.Now().Add(3 * time.Second))
+		_, _ = clientA.Write([]byte("AMQP\x00\x00\x09\x01"))
+
+		// Read Connection.Start
+		var buf [512]byte
+		_, _ = clientA.Read(buf[:])
+
+		// Send Start-Ok
+		_, _ = clientA.Write(buildConnectionStartOk("user", "pass"))
+
+		// Read Tune
+		_, _ = clientA.Read(buf[:])
+
+		// Send Tune-Ok
+		tuneOk := buildAMQPFrame(frameMethod, 0, []byte{0x00, 0x0A, 0x00, 0x1F, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x3C})
+		_, _ = clientA.Write(tuneOk)
+
+		// Send Connection.Open with allowed vhost "/prod"
+		openPayload := []byte{0x00, 0x0A, 0x00, 0x28, 0x05, '/', 'p', 'r', 'o', 'd', 0x00, 0x00}
+		openFrame := buildAMQPFrame(frameMethod, 0, openPayload)
+		_, _ = clientA.Write(openFrame)
+
+		// Read Connection.Open-Ok
+		_, _ = clientA.Read(buf[:])
+
+		// Post-handshake: test bidirectional proxy
+		_, _ = clientA.Write([]byte("PING"))
+		resp := make([]byte, 4)
+		_, _ = io.ReadFull(clientA, resp)
+		_ = clientA.Close()
+	}()
+
+	select {
+	case res := <-done:
+		if res.blocked {
+			t.Errorf("expected connection to be allowed, got blocked=true")
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("test timed out")
+	}
+}
+

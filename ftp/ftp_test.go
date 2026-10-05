@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/routewarden/tcp-warden/plugins/sdk"
 )
 
 func TestFTPPlugin_SelfTest(t *testing.T) {
@@ -121,4 +123,198 @@ func TestFTPPlugin_AuthTLS_BufferedHandover(t *testing.T) {
 		t.Fatal("timed out waiting for upstream to receive buffered TLS hello")
 	}
 }
+
+func TestFTPPlugin_NormalLoginAndQuit(t *testing.T) {
+	clientA, clientB := net.Pipe()
+	defer clientA.Close()
+	defer clientB.Close()
+
+	upA, upB := net.Pipe()
+	defer upA.Close()
+	defer upB.Close()
+
+	insp := &Inspector{}
+	done := make(chan error, 1)
+
+	go func() {
+		_, _, _, err := insp.Run(nil, clientB, upA)
+		done <- err
+	}()
+
+	// Upstream server mock
+	go func() {
+		_ = upB.SetDeadline(time.Now().Add(2 * time.Second))
+		_, _ = upB.Write([]byte("220 FTP Service Ready\r\n"))
+
+		buf := make([]byte, 128)
+		_, _ = upB.Read(buf) // USER
+		_, _ = upB.Write([]byte("331 User name okay, need password.\r\n"))
+
+		_, _ = upB.Read(buf) // PASS
+		_, _ = upB.Write([]byte("230 User logged in, proceed.\r\n"))
+
+		_, _ = upB.Read(buf) // QUIT
+		_, _ = upB.Write([]byte("221 Service closing control connection.\r\n"))
+		_ = upB.Close()
+	}()
+
+	// Client mock
+	go func() {
+		_ = clientA.SetDeadline(time.Now().Add(2 * time.Second))
+		buf := make([]byte, 128)
+		_, _ = clientA.Read(buf) // Read 220
+
+		_, _ = clientA.Write([]byte("USER testuser\r\n"))
+		_, _ = clientA.Read(buf) // Read 331
+
+		_, _ = clientA.Write([]byte("PASS secret123\r\n"))
+		_, _ = clientA.Read(buf) // Read 230
+
+		_, _ = clientA.Write([]byte("QUIT\r\n"))
+		_, _ = clientA.Read(buf) // Read 221
+		_ = clientA.Close()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("unexpected error during normal FTP session: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("normal FTP session timed out")
+	}
+}
+
+func TestFTPPlugin_AuthFailureTriggersEvent(t *testing.T) {
+	clientA, clientB := net.Pipe()
+	defer clientA.Close()
+	defer clientB.Close()
+
+	upA, upB := net.Pipe()
+	defer upA.Close()
+	defer upB.Close()
+
+	authFailureCalled := false
+	var secAction, secReason string
+	ctx := &sdk.DefaultContext{
+		AuthFailureFunc: func() {
+			authFailureCalled = true
+		},
+		SecurityFunc: func(action, reason string) {
+			secAction = action
+			secReason = reason
+		},
+	}
+
+	insp := &Inspector{}
+	done := make(chan error, 1)
+
+	go func() {
+		_, _, _, err := insp.Run(ctx, clientB, upA)
+		done <- err
+	}()
+
+	// Upstream server mock: fails auth
+	go func() {
+		_ = upB.SetDeadline(time.Now().Add(2 * time.Second))
+		_, _ = upB.Write([]byte("220 Welcome\r\n"))
+
+		buf := make([]byte, 128)
+		_, _ = upB.Read(buf) // USER
+		_, _ = upB.Write([]byte("331 Need pass\r\n"))
+
+		_, _ = upB.Read(buf) // PASS
+		_, _ = upB.Write([]byte("530 Login incorrect.\r\n"))
+
+		_, _ = upB.Read(buf) // QUIT
+		_, _ = upB.Write([]byte("221 Goodbye.\r\n"))
+		_ = upB.Close()
+	}()
+
+	// Client mock
+	go func() {
+		_ = clientA.SetDeadline(time.Now().Add(2 * time.Second))
+		buf := make([]byte, 128)
+		_, _ = clientA.Read(buf) // 220
+
+		_, _ = clientA.Write([]byte("USER baduser\r\n"))
+		_, _ = clientA.Read(buf) // 331
+
+		_, _ = clientA.Write([]byte("PASS wrongpass\r\n"))
+		_, _ = clientA.Read(buf) // 530
+
+		_, _ = clientA.Write([]byte("QUIT\r\n"))
+		_, _ = clientA.Read(buf) // 221
+		_ = clientA.Close()
+	}()
+
+	select {
+	case <-done:
+		if !authFailureCalled {
+			t.Errorf("expected OnAuthFailure to be called on 530 Login incorrect")
+		}
+		if secAction != "auth_failure" {
+			t.Errorf("expected security event action 'auth_failure', got %q", secAction)
+		}
+		if secReason != "ftp_login_failed" {
+			t.Errorf("expected security event reason 'ftp_login_failed', got %q", secReason)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("auth failure test timed out")
+	}
+}
+
+func TestFTPPlugin_MultilineGreeting(t *testing.T) {
+	clientA, clientB := net.Pipe()
+	defer clientA.Close()
+	defer clientB.Close()
+
+	upA, upB := net.Pipe()
+	defer upA.Close()
+	defer upB.Close()
+
+	insp := &Inspector{}
+	done := make(chan error, 1)
+
+	go func() {
+		_, _, _, err := insp.Run(nil, clientB, upA)
+		done <- err
+	}()
+
+	// Upstream sends 3-line RFC 959 multiline greeting
+	go func() {
+		_ = upB.SetDeadline(time.Now().Add(2 * time.Second))
+		multiline := "220-Welcome to Corporate FTP Server\r\n220-All connections are monitored\r\n220 Service ready.\r\n"
+		_, _ = upB.Write([]byte(multiline))
+
+		buf := make([]byte, 128)
+		_, _ = upB.Read(buf)
+		_, _ = upB.Write([]byte("221 Closing.\r\n"))
+		_ = upB.Close()
+	}()
+
+	// Client reads complete multiline greeting
+	go func() {
+		_ = clientA.SetDeadline(time.Now().Add(2 * time.Second))
+		buf := make([]byte, 256)
+		n, _ := io.ReadFull(clientA, buf[:len("220-Welcome to Corporate FTP Server\r\n220-All connections are monitored\r\n220 Service ready.\r\n")])
+		if !strings.Contains(string(buf[:n]), "All connections are monitored") {
+			t.Errorf("multiline greeting not received properly: %q", string(buf[:n]))
+		}
+
+		_, _ = clientA.Write([]byte("QUIT\r\n"))
+		_, _ = clientA.Read(buf)
+		_ = clientA.Close()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("multiline greeting test timed out")
+	}
+}
+
 
