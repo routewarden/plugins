@@ -1,7 +1,9 @@
 package memcached
 
 import (
+	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -55,5 +57,169 @@ func TestMemcached_FlushAllBlocked(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Error("test timed out")
+	}
+}
+
+func TestMemcached_ShutdownBlocked(t *testing.T) {
+	clientA, clientB := net.Pipe()
+	defer clientA.Close()
+	defer clientB.Close()
+
+	upA, upB := net.Pipe()
+	defer upA.Close()
+	defer upB.Close()
+
+	insp := &Inspector{BlockedCommands: []string{"flush_all", "shutdown"}}
+	insp.buildLookup()
+
+	done := make(chan bool, 1)
+	go func() {
+		_, blocked, _, _ := insp.Run(nil, clientB, upA)
+		done <- blocked
+	}()
+
+	_ = clientA.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	_, _ = clientA.Write([]byte("shutdown\r\n"))
+
+	var buf [128]byte
+	_ = clientA.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, _ := clientA.Read(buf[:])
+	resp := string(buf[:n])
+	if !strings.Contains(resp, "ERROR command 'SHUTDOWN' blocked") {
+		t.Errorf("expected blocked error message, got: %s", resp)
+	}
+
+	select {
+	case b := <-done:
+		if !b {
+			t.Errorf("expected shutdown to be blocked")
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("test timed out")
+	}
+}
+
+func TestMemcached_GetCommandForwarding(t *testing.T) {
+	clientA, clientB := net.Pipe()
+	defer clientA.Close()
+	defer clientB.Close()
+
+	upA, upB := net.Pipe()
+	defer upA.Close()
+	defer upB.Close()
+
+	insp := &Inspector{BlockedCommands: []string{"flush_all"}}
+	insp.buildLookup()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _, _ = insp.Run(nil, clientB, upA)
+	}()
+
+	// Client sends get mykey\r\n
+	go func() {
+		_, _ = clientA.Write([]byte("get mykey\r\n"))
+	}()
+
+	// Upstream receives get mykey\r\n
+	var upBuf [64]byte
+	n, err := upB.Read(upBuf[:])
+	if err != nil {
+		t.Fatalf("upstream failed read: %v", err)
+	}
+	if string(upBuf[:n]) != "get mykey\r\n" {
+		t.Errorf("upstream received %q, expected 'get mykey\\r\\n'", string(upBuf[:n]))
+	}
+
+	// Upstream responds with VALUE block and END
+	upstreamResp := "VALUE mykey 0 5\r\nhello\r\nEND\r\n"
+	go func() {
+		_, _ = upB.Write([]byte(upstreamResp))
+	}()
+
+	// Client receives the full response (two writes: header line + data/END)
+	clientBuf := make([]byte, len(upstreamResp))
+	if _, err := io.ReadFull(clientA, clientBuf); err != nil {
+		t.Fatalf("client failed reading full response: %v", err)
+	}
+	if string(clientBuf) != upstreamResp {
+		t.Errorf("client received %q, expected %q", string(clientBuf), upstreamResp)
+	}
+
+	_ = clientA.Close()
+	_ = upB.Close()
+	<-done
+}
+
+func TestMemcached_SetCommandForwarding(t *testing.T) {
+	clientA, clientB := net.Pipe()
+	defer clientA.Close()
+	defer clientB.Close()
+
+	upA, upB := net.Pipe()
+	defer upA.Close()
+	defer upB.Close()
+
+	insp := &Inspector{BlockedCommands: []string{"flush_all"}}
+	insp.buildLookup()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _, _ = insp.Run(nil, clientB, upA)
+	}()
+
+	// Client sends set command with payload: set mykey 0 0 5\r\nhello\r\n
+	clientPayload := "set mykey 0 0 5\r\nhello\r\n"
+	go func() {
+		_, _ = clientA.Write([]byte(clientPayload))
+	}()
+
+	// Upstream receives command line and data (two writes from inspector)
+	upBuf := make([]byte, len(clientPayload))
+	if _, err := io.ReadFull(upB, upBuf); err != nil {
+		t.Fatalf("upstream failed reading full payload: %v", err)
+	}
+	if string(upBuf) != clientPayload {
+		t.Errorf("upstream received %q, expected %q", string(upBuf), clientPayload)
+	}
+
+	// Upstream responds STORED\r\n
+	go func() {
+		_, _ = upB.Write([]byte("STORED\r\n"))
+	}()
+
+	// Client reads STORED\r\n
+	var clientBuf [64]byte
+	clientN, err := clientA.Read(clientBuf[:])
+	if err != nil {
+		t.Fatalf("client failed read: %v", err)
+	}
+	if string(clientBuf[:clientN]) != "STORED\r\n" {
+		t.Errorf("client received %q, expected 'STORED\\r\\n'", string(clientBuf[:clientN]))
+	}
+
+	_ = clientA.Close()
+	_ = upB.Close()
+	<-done
+}
+
+func TestMemcached_ValidateConfig(t *testing.T) {
+	p := &Plugin{}
+	if err := p.ValidateConfig(nil); err != nil {
+		t.Errorf("nil config rejected: %v", err)
+	}
+	if err := p.ValidateConfig(map[string]any{"blocked_commands": []string{"flush_all"}}); err != nil {
+		t.Errorf("valid string slice rejected: %v", err)
+	}
+	if err := p.ValidateConfig(map[string]any{"blocked_commands": []any{"flush_all", "shutdown"}}); err != nil {
+		t.Errorf("valid any slice rejected: %v", err)
+	}
+	if err := p.ValidateConfig(map[string]any{"blocked_commands": "not-a-slice"}); err == nil {
+		t.Errorf("expected error for non-slice blocked_commands")
+	}
+	if err := p.ValidateConfig(map[string]any{"blocked_commands": []any{123}}); err == nil {
+		t.Errorf("expected error for non-string elements in blocked_commands")
 	}
 }
