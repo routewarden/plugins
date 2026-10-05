@@ -1,11 +1,11 @@
 package minecraft
 
 import (
-	"slices"
-	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -42,6 +42,9 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 	bytesIn.Add(int64(n))
 
 	if n < 3 {
+		if err == io.EOF || errors.Is(err, io.EOF) {
+			return result(err), false, "", err
+		}
 		return result(nil), true, "minecraft handshake packet too short", nil
 	}
 
@@ -75,12 +78,7 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 	client.SetDeadline(time.Time{})
 	upstream.SetDeadline(time.Time{})
 
-	bufferedClient := &protocol.BufferedConn{
-		Reader: bytes.NewReader(nil),
-		Conn:   client,
-	}
-
-	proxyRes := protocol.Proxy(bufferedClient, upstream)
+	proxyRes := protocol.Proxy(client, upstream)
 	bytesIn.Add(proxyRes.BytesIn)
 	bytesOut.Add(proxyRes.BytesOut)
 
@@ -88,7 +86,7 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		ctx.OnSecurityEvent("allowed", fmt.Sprintf("minecraft_session_%d_bytes", bytesIn.Load()))
 	}
 
-	return result(proxyRes.Err), false, "", nil
+	return result(proxyRes.Err), false, "", proxyRes.Err
 }
 
 func readVarInt(b []byte) (int, int, error) {

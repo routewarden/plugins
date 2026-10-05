@@ -1,8 +1,8 @@
 package mqtt
 
 import (
-	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -38,6 +38,9 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 	// 1. Read MQTT Fixed Header: Packet Type (1 byte)
 	var typeBuf [1]byte
 	if _, err := io.ReadFull(client, typeBuf[:]); err != nil {
+		if err == io.EOF || errors.Is(err, io.EOF) {
+			return result(err), false, "", err
+		}
 		return result(err), true, "failed reading MQTT packet type: " + err.Error(), err
 	}
 	bytesIn.Add(1)
@@ -99,16 +102,11 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 	client.SetDeadline(time.Time{})
 	upstream.SetDeadline(time.Time{})
 
-	bufferedClient := &protocol.BufferedConn{
-		Reader: bytes.NewReader(nil),
-		Conn:   client,
-	}
-
-	proxyRes := protocol.Proxy(bufferedClient, upstream)
+	proxyRes := protocol.Proxy(client, upstream)
 	bytesIn.Add(proxyRes.BytesIn)
 	bytesOut.Add(proxyRes.BytesOut)
 
-	return result(proxyRes.Err), false, "", nil
+	return result(proxyRes.Err), false, "", proxyRes.Err
 }
 
 func readVarInt(r io.Reader) (int, []byte, error) {
