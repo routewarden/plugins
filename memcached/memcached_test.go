@@ -223,3 +223,118 @@ func TestMemcached_ValidateConfig(t *testing.T) {
 		t.Errorf("expected error for non-string elements in blocked_commands")
 	}
 }
+
+func TestMemcached_SetEmptyValueForwarding(t *testing.T) {
+	clientA, clientB := net.Pipe()
+	defer clientA.Close()
+	defer clientB.Close()
+
+	upA, upB := net.Pipe()
+	defer upA.Close()
+	defer upB.Close()
+
+	insp := &Inspector{BlockedCommands: []string{"flush_all"}}
+	insp.buildLookup()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _, _ = insp.Run(nil, clientB, upA)
+	}()
+
+	// Client sends set command with 0-byte payload: set emptykey 0 0 0\r\n\r\n
+	clientPayload := "set emptykey 0 0 0\r\n\r\n"
+	go func() {
+		_, _ = clientA.Write([]byte(clientPayload))
+	}()
+
+	// Upstream receives command line and empty data (the 2-byte \r\n)
+	upBuf := make([]byte, len(clientPayload))
+	if _, err := io.ReadFull(upB, upBuf); err != nil {
+		t.Fatalf("upstream failed reading empty payload: %v", err)
+	}
+	if string(upBuf) != clientPayload {
+		t.Errorf("upstream received %q, expected %q", string(upBuf), clientPayload)
+	}
+
+	// Upstream responds STORED\r\n
+	go func() {
+		_, _ = upB.Write([]byte("STORED\r\n"))
+	}()
+
+	var clientBuf [64]byte
+	clientN, err := clientA.Read(clientBuf[:])
+	if err != nil {
+		t.Fatalf("client failed read: %v", err)
+	}
+	if string(clientBuf[:clientN]) != "STORED\r\n" {
+		t.Errorf("client received %q, expected 'STORED\\r\\n'", string(clientBuf[:clientN]))
+	}
+
+	_ = clientA.Close()
+	_ = upB.Close()
+	<-done
+}
+
+func TestMemcached_NoReplyHandling(t *testing.T) {
+	clientA, clientB := net.Pipe()
+	defer clientA.Close()
+	defer clientB.Close()
+
+	upA, upB := net.Pipe()
+	defer upA.Close()
+	defer upB.Close()
+
+	insp := &Inspector{BlockedCommands: []string{"flush_all"}}
+	insp.buildLookup()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _, _ = insp.Run(nil, clientB, upA)
+	}()
+
+	// Client sends set with noreply, followed immediately by get command
+	setPayload := "set mykey 0 0 5 noreply\r\nhello\r\n"
+	getPayload := "get mykey\r\n"
+	go func() {
+		_, _ = clientA.Write([]byte(setPayload + getPayload))
+	}()
+
+	// Upstream receives set payload
+	upBufSet := make([]byte, len(setPayload))
+	if _, err := io.ReadFull(upB, upBufSet); err != nil {
+		t.Fatalf("upstream failed reading set payload: %v", err)
+	}
+	if string(upBufSet) != setPayload {
+		t.Errorf("upstream received %q, expected %q", string(upBufSet), setPayload)
+	}
+
+	// Upstream does NOT reply to set (noreply), but receives getPayload
+	upBufGet := make([]byte, len(getPayload))
+	if _, err := io.ReadFull(upB, upBufGet); err != nil {
+		t.Fatalf("upstream failed reading get payload: %v", err)
+	}
+	if string(upBufGet) != getPayload {
+		t.Errorf("upstream received %q, expected %q", string(upBufGet), getPayload)
+	}
+
+	// Upstream replies to get
+	go func() {
+		_, _ = upB.Write([]byte("VALUE mykey 0 5\r\nhello\r\nEND\r\n"))
+	}()
+
+	expectedResp := "VALUE mykey 0 5\r\nhello\r\nEND\r\n"
+	clientBuf := make([]byte, len(expectedResp))
+	if _, err := io.ReadFull(clientA, clientBuf); err != nil {
+		t.Fatalf("client failed reading response to get: %v", err)
+	}
+	if string(clientBuf) != expectedResp {
+		t.Errorf("client received %q, expected %q", string(clientBuf), expectedResp)
+	}
+
+	_ = clientA.Close()
+	_ = upB.Close()
+	<-done
+}
+

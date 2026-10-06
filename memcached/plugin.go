@@ -225,7 +225,7 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 			if len(fields) >= 5 {
 				dataLen := 0
 				fmt.Sscanf(fields[4], "%d", &dataLen)
-				if dataLen > 0 && dataLen <= 1024*1024 { // max 1MB value
+				if dataLen >= 0 && dataLen <= 1024*1024 { // max 1MB value
 					dataBuf := make([]byte, dataLen+2) // +2 for \r\n
 					if _, err := io.ReadFull(clientReader, dataBuf); err != nil {
 						return result(err), false, "", nil
@@ -255,6 +255,11 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 			bytesIn.Add(res.BytesIn)
 			bytesOut.Add(res.BytesOut)
 			return result(nil), false, "", nil
+		}
+
+		// If command specified 'noreply', the upstream server sends no response
+		if len(fields) > 0 && strings.EqualFold(fields[len(fields)-1], "noreply") {
+			continue
 		}
 
 		// Read upstream response line

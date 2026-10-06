@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/routewarden/tcp-warden/plugins/sdk"
+	"github.com/routewarden/tcp-warden/protocol"
 )
 
 // Inspector inspects Redis RESP protocol commands and responses.
@@ -82,7 +83,7 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		}
 
 		// 3. Read response from upstream and check for auth errors
-		upstream.SetReadDeadline(time.Now().Add(30 * time.Second))
+		upstream.SetReadDeadline(time.Now().Add(5 * time.Minute))
 		respBytes, err := readRedisResponse(upstreamReader)
 		if err != nil {
 			return result(err), false, "", nil
@@ -106,6 +107,18 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		if _, err := client.Write(respBytes); err != nil {
 			return result(err), false, "", nil
 		}
+
+		// 4. If command switched connection to pub/sub or monitor mode, switch to full-duplex proxy
+		if upperCmd == "SUBSCRIBE" || upperCmd == "PSUBSCRIBE" || upperCmd == "SSUBSCRIBE" || upperCmd == "MONITOR" {
+			client.SetDeadline(time.Time{})
+			upstream.SetDeadline(time.Time{})
+			bClient := &protocol.BufferedConn{Reader: clientReader, Conn: client}
+			bUpstream := &protocol.BufferedConn{Reader: upstreamReader, Conn: upstream}
+			proxyRes := protocol.Proxy(bClient, bUpstream)
+			bytesIn.Add(proxyRes.BytesIn)
+			bytesOut.Add(proxyRes.BytesOut)
+			return result(nil), false, "", nil
+		}
 	}
 }
 
@@ -126,6 +139,9 @@ func readRedisCommand(r *bufio.Reader) (string, []byte, error) {
 		if err != nil || count <= 0 {
 			return "", raw, nil
 		}
+		if count > 1024*1024 {
+			return "", raw, fmt.Errorf("redis multi-bulk count exceeds limit: %d", count)
+		}
 
 		var cmdName string
 		for i := 0; i < count; i++ {
@@ -138,6 +154,9 @@ func readRedisCommand(r *bufio.Reader) (string, []byte, error) {
 			if len(lenTrimmed) > 0 && lenTrimmed[0] == '$' {
 				argLen, err := strconv.Atoi(lenTrimmed[1:])
 				if err == nil && argLen >= 0 {
+					if argLen > 512*1024*1024 {
+						return "", raw, fmt.Errorf("redis bulk string exceeds max size 512MB: %d", argLen)
+					}
 					argData := make([]byte, argLen+2)
 					if _, err := io.ReadFull(r, argData); err != nil {
 						return "", raw, err
@@ -178,6 +197,9 @@ func readRedisResponse(r *bufio.Reader) ([]byte, error) {
 		if err != nil || argLen < 0 {
 			return resp, nil
 		}
+		if argLen > 512*1024*1024 {
+			return resp, fmt.Errorf("redis bulk string exceeds max size 512MB: %d", argLen)
+		}
 		body := make([]byte, argLen+2)
 		if _, err := io.ReadFull(r, body); err != nil {
 			return resp, err
@@ -188,6 +210,9 @@ func readRedisResponse(r *bufio.Reader) ([]byte, error) {
 		count, err := strconv.Atoi(trimmed)
 		if err != nil || count <= 0 {
 			return resp, nil
+		}
+		if count > 1024*1024 {
+			return resp, fmt.Errorf("redis multi-bulk count exceeds limit: %d", count)
 		}
 		for range count {
 			sub, err := readRedisResponse(r)
@@ -202,6 +227,9 @@ func readRedisResponse(r *bufio.Reader) ([]byte, error) {
 		count, err := strconv.Atoi(trimmed)
 		if err != nil || count <= 0 {
 			return resp, nil
+		}
+		if count > 512*1024 {
+			return resp, fmt.Errorf("redis map count exceeds limit: %d", count)
 		}
 		for i := 0; i < count*2; i++ {
 			sub, err := readRedisResponse(r)

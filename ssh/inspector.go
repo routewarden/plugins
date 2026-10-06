@@ -126,6 +126,13 @@ func (c *sshMonitorConn) CloseWrite() error {
 	return nil
 }
 
+func (c *sshMonitorConn) CloseRead() error {
+	if cr, ok := c.Conn.(interface{ CloseRead() error }); ok {
+		return cr.CloseRead()
+	}
+	return nil
+}
+
 func (c *sshMonitorConn) scan() {
 	for len(c.buf) >= 6 {
 		pktLen := int(c.buf[0])<<24 | int(c.buf[1])<<16 | int(c.buf[2])<<8 | int(c.buf[3])
