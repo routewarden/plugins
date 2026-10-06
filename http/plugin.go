@@ -360,22 +360,28 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 			return result(err), false, "", nil
 		}
 
-		// 1. Check Host header
+		// 1. Check Host header and absolute Request-URI host
 		if len(insp.AllowedHosts) > 0 {
-			reqHost := req.Host
-			if host, _, err := net.SplitHostPort(reqHost); err == nil {
-				reqHost = host
-			} else if idx := strings.Index(reqHost, ":"); idx != -1 && !strings.Contains(reqHost, "]") {
-				reqHost = reqHost[:idx]
+			hostsToCheck := []string{req.Host}
+			if req.URL.Host != "" && req.URL.Host != req.Host {
+				hostsToCheck = append(hostsToCheck, req.URL.Host)
 			}
-			reqHost = strings.Trim(reqHost, "[]")
-			reqHost = strings.TrimSuffix(reqHost, ".")
-			if !isHostAllowed(reqHost, insp.AllowedHosts) {
-				sendHTTPForbidden(client, "Host forbidden by RouteWarden\n")
-				if ctx != nil {
-					ctx.OnSecurityEvent("blocked", "http_host_blocked_"+reqHost)
+			for _, h := range hostsToCheck {
+				reqHost := h
+				if host, _, err := net.SplitHostPort(reqHost); err == nil {
+					reqHost = host
+				} else if idx := strings.Index(reqHost, ":"); idx != -1 && !strings.Contains(reqHost, "]") {
+					reqHost = reqHost[:idx]
 				}
-				return result(nil), true, "blocked http host: " + reqHost, nil
+				reqHost = strings.Trim(reqHost, "[]")
+				reqHost = strings.TrimSuffix(reqHost, ".")
+				if !isHostAllowed(reqHost, insp.AllowedHosts) {
+					sendHTTPForbidden(client, "Host forbidden by RouteWarden\n")
+					if ctx != nil {
+						ctx.OnSecurityEvent("blocked", "http_host_blocked_"+reqHost)
+					}
+					return result(nil), true, "blocked http host: " + reqHost, nil
+				}
 			}
 		}
 
@@ -410,8 +416,22 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		if len(insp.BlockedPaths) > 0 {
 			reqPath := req.URL.Path
 			cleanedPath := path.Clean(reqPath)
+			pathsToMatch := []string{reqPath, cleanedPath}
+			if req.URL.RawPath != "" && req.URL.RawPath != reqPath {
+				pathsToMatch = append(pathsToMatch, req.URL.RawPath)
+			}
+			if req.RequestURI != "" && req.RequestURI != reqPath {
+				pathsToMatch = append(pathsToMatch, req.RequestURI)
+			}
 			for _, rx := range insp.BlockedPaths {
-				if rx.MatchString(reqPath) || rx.MatchString(cleanedPath) {
+				matched := false
+				for _, p := range pathsToMatch {
+					if rx.MatchString(p) {
+						matched = true
+						break
+					}
+				}
+				if matched {
 					sendHTTPForbidden(client, "Path forbidden by RouteWarden\n")
 					if ctx != nil {
 						ctx.OnSecurityEvent("blocked", "http_path_blocked_"+cleanedPath)
@@ -518,9 +538,9 @@ func isPathAllowed(reqPath string, allowedPaths []string) bool {
 		if allowed == "*" {
 			return true
 		}
-		if before, ok :=strings.CutSuffix(allowed, "*"); ok  {
+		if before, ok := strings.CutSuffix(allowed, "*"); ok {
 			prefix := before
-			if strings.HasPrefix(cleaned, prefix) {
+			if strings.HasPrefix(cleaned, prefix) || cleaned == strings.TrimSuffix(prefix, "/") {
 				return true
 			}
 		} else if reqPath == allowed || cleaned == allowed {

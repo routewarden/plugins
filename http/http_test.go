@@ -310,4 +310,61 @@ func TestHTTP_PathTraversalEscape(t *testing.T) {
 	if isPathAllowed("/api/../../etc/passwd", allowed) {
 		t.Errorf("expected /api/../../etc/passwd to be rejected as traversal escape")
 	}
+	// Parent route without trailing slash matches wildcard rule
+	if !isPathAllowed("/api", allowed) {
+		t.Errorf("expected /api to match /api/*")
+	}
 }
+
+func TestHTTP_AbsoluteURIHost(t *testing.T) {
+	insp := &Inspector{
+		AllowedHosts: []string{"allowed.example.com"},
+	}
+
+	clientA, clientB := net.Pipe()
+	defer clientA.Close()
+	defer clientB.Close()
+
+	upA, upB := net.Pipe()
+	defer upA.Close()
+	defer upB.Close()
+
+	done := make(chan struct {
+		blocked bool
+		reason  string
+	}, 1)
+
+	go func() {
+		_, blocked, reason, _ := insp.Run(nil, clientB, upA)
+		done <- struct {
+			blocked bool
+			reason  string
+		}{blocked, reason}
+	}()
+
+	// Client sends absolute URI with evil.com host despite Host header saying allowed.example.com
+	go func() {
+		_ = clientA.SetWriteDeadline(time.Now().Add(2 * time.Second))
+		req := "GET http://evil.com/api/test HTTP/1.1\r\nHost: allowed.example.com\r\n\r\n"
+		_, _ = clientA.Write([]byte(req))
+
+		var buf [512]byte
+		_ = clientA.SetReadDeadline(time.Now().Add(2 * time.Second))
+		n, _ := clientA.Read(buf[:])
+		_ = clientA.Close()
+
+		if !strings.Contains(string(buf[:n]), "403 Forbidden") {
+			t.Errorf("expected 403 Forbidden response for absolute URI host mismatch, got: %s", string(buf[:n]))
+		}
+	}()
+
+	select {
+	case res := <-done:
+		if !res.blocked {
+			t.Errorf("expected absolute URI evil.com to be blocked")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("test timed out")
+	}
+}
+
