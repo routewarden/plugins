@@ -144,24 +144,30 @@ func readRedisCommand(r *bufio.Reader) (string, []byte, error) {
 		}
 
 		var cmdName string
+		totalBytes := len(raw)
 		for i := 0; i < count; i++ {
 			lenLine, err := r.ReadString('\n')
 			if err != nil {
 				return "", raw, err
 			}
 			raw = append(raw, lenLine...)
+			totalBytes += len(lenLine)
 			lenTrimmed := strings.TrimRight(lenLine, "\r\n")
 			if len(lenTrimmed) > 0 && lenTrimmed[0] == '$' {
 				argLen, err := strconv.Atoi(lenTrimmed[1:])
 				if err == nil && argLen >= 0 {
-					if argLen > 512*1024*1024 {
-						return "", raw, fmt.Errorf("redis bulk string exceeds max size 512MB: %d", argLen)
+					if argLen > 64*1024*1024 {
+						return "", raw, fmt.Errorf("redis bulk string exceeds max size 64MB: %d", argLen)
+					}
+					if totalBytes+argLen > 128*1024*1024 {
+						return "", raw, fmt.Errorf("redis total command size exceeds max 128MB")
 					}
 					argData := make([]byte, argLen+2)
 					if _, err := io.ReadFull(r, argData); err != nil {
 						return "", raw, err
 					}
 					raw = append(raw, argData...)
+					totalBytes += len(argData)
 					if i == 0 {
 						cmdName = strings.TrimRight(string(argData), "\r\n")
 					}
@@ -179,6 +185,14 @@ func readRedisCommand(r *bufio.Reader) (string, []byte, error) {
 }
 
 func readRedisResponse(r *bufio.Reader) ([]byte, error) {
+	return readRedisResponseWithDepth(r, 0)
+}
+
+func readRedisResponseWithDepth(r *bufio.Reader, depth int) ([]byte, error) {
+	if depth > 32 {
+		return nil, fmt.Errorf("redis response nesting depth exceeds limit 32")
+	}
+
 	line, err := r.ReadString('\n')
 	if err != nil {
 		return nil, err
@@ -197,8 +211,8 @@ func readRedisResponse(r *bufio.Reader) ([]byte, error) {
 		if err != nil || argLen < 0 {
 			return resp, nil
 		}
-		if argLen > 512*1024*1024 {
-			return resp, fmt.Errorf("redis bulk string exceeds max size 512MB: %d", argLen)
+		if argLen > 64*1024*1024 {
+			return resp, fmt.Errorf("redis bulk string exceeds max size 64MB: %d", argLen)
 		}
 		body := make([]byte, argLen+2)
 		if _, err := io.ReadFull(r, body); err != nil {
@@ -215,7 +229,7 @@ func readRedisResponse(r *bufio.Reader) ([]byte, error) {
 			return resp, fmt.Errorf("redis multi-bulk count exceeds limit: %d", count)
 		}
 		for range count {
-			sub, err := readRedisResponse(r)
+			sub, err := readRedisResponseWithDepth(r, depth+1)
 			if err != nil {
 				return resp, err
 			}
@@ -232,7 +246,7 @@ func readRedisResponse(r *bufio.Reader) ([]byte, error) {
 			return resp, fmt.Errorf("redis map count exceeds limit: %d", count)
 		}
 		for i := 0; i < count*2; i++ {
-			sub, err := readRedisResponse(r)
+			sub, err := readRedisResponseWithDepth(r, depth+1)
 			if err != nil {
 				return resp, err
 			}

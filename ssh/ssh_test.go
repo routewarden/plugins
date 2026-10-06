@@ -229,3 +229,81 @@ func TestSSH_ValidateConfig(t *testing.T) {
 		t.Errorf("expected error for non-int max_auth_tries")
 	}
 }
+
+func TestSSH_SecurityBoundaries(t *testing.T) {
+	// 1. RFC 4253 pre-banner comment line
+	clientConn, clientPeer := net.Pipe()
+	defer clientConn.Close()
+	defer clientPeer.Close()
+
+	upConn, upPeer := net.Pipe()
+	defer upConn.Close()
+	defer upPeer.Close()
+
+	insp := &Inspector{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, blocked, _, _ := insp.Run(nil, clientConn, upConn)
+		if blocked {
+			t.Errorf("expected valid handshake with RFC 4253 pre-banner comment")
+		}
+	}()
+
+	// Client sends comment followed by actual banner
+	greeting := "Welcome to corporate bastion\r\nSSH-2.0-OpenSSH_8.9p1\r\n"
+	go func() {
+		_, _ = clientPeer.Write([]byte(greeting))
+	}()
+
+	buf := make([]byte, len(greeting))
+	_, err := io.ReadFull(upPeer, buf)
+	if err != nil {
+		t.Fatalf("upstream failed reading greeting: %v", err)
+	}
+	if string(buf) != greeting {
+		t.Errorf("expected %q, got %q", greeting, string(buf))
+	}
+
+	_ = clientPeer.Close()
+	_ = upPeer.Close()
+	<-done
+
+	// 2. Oversized banner line without newline (>1024 bytes) must be rejected
+	cConn, cPeer := net.Pipe()
+	defer cConn.Close()
+	defer cPeer.Close()
+
+	uConn, uPeer := net.Pipe()
+	defer uConn.Close()
+	defer uPeer.Close()
+
+	done2 := make(chan struct{})
+	go func() {
+		defer close(done2)
+		_, blocked, reason, _ := insp.Run(nil, cConn, uConn)
+		if !blocked {
+			t.Errorf("expected blocked on oversized banner line")
+		}
+		if !strings.Contains(reason, "invalid SSH protocol banner") {
+			t.Errorf("expected invalid SSH banner reason, got: %s", reason)
+		}
+	}()
+
+	hugeBanner := strings.Repeat("A", 1500)
+	go func() {
+		_, _ = cPeer.Write([]byte(hugeBanner))
+	}()
+
+	// Client reads disconnect response
+	respBuf := make([]byte, 128)
+	n, _ := cPeer.Read(respBuf)
+	if n == 0 {
+		t.Error("expected disconnect response to client")
+	}
+
+	_ = cPeer.Close()
+	_ = uPeer.Close()
+	<-done2
+}
+

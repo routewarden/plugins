@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"bufio"
 	"context"
 	"io"
 	"net"
@@ -257,4 +258,23 @@ func TestRedis_Run_SubscribeStreaming(t *testing.T) {
 	_ = upPeer.Close()
 	<-done
 }
+
+func TestRedis_SecurityBoundaries(t *testing.T) {
+	// 1. Nested arrays exceeding recursion limit (>32)
+	deepResp := strings.Repeat("*1\r\n", 35) + "+OK\r\n"
+	r := bufio.NewReader(strings.NewReader(deepResp))
+	_, err := readRedisResponse(r)
+	if err == nil || !strings.Contains(err.Error(), "nesting depth exceeds limit") {
+		t.Errorf("expected nesting depth error for deeply nested response, got: %v", err)
+	}
+
+	// 2. Client oversized bulk string length (>64MB)
+	cmd := "*1\r\n$70000000\r\n"
+	cmdR := bufio.NewReader(strings.NewReader(cmd))
+	_, _, err = readRedisCommand(cmdR)
+	if err == nil || !strings.Contains(err.Error(), "exceeds max size 64MB") {
+		t.Errorf("expected max size error for >64MB bulk string, got: %v", err)
+	}
+}
+
 

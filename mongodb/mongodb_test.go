@@ -184,3 +184,60 @@ func TestMongoDB_ValidateConfig(t *testing.T) {
 		t.Errorf("expected error for non-string elements in blocked_ops")
 	}
 }
+
+func TestMongoDB_BSONParsing_SecurityBoundaries(t *testing.T) {
+	// 1. Auth error with preceding subdocument (0x03) e.g. topologyVersion
+	// BSON document:
+	// docLen (4 bytes)
+	// 0x03 "topologyVersion" \0 [subDocLen=5, \0]
+	// 0x10 "code" \0 [18 as int32]
+	// 0x00 terminator
+	subDoc := []byte{0x05, 0x00, 0x00, 0x00, 0x00}
+	var rawBson []byte
+	rawBson = append(rawBson, 0x03)
+	rawBson = append(rawBson, []byte("topologyVersion\x00")...)
+	rawBson = append(rawBson, subDoc...)
+	rawBson = append(rawBson, 0x10)
+	rawBson = append(rawBson, []byte("code\x00")...)
+	rawBson = append(rawBson, 18, 0, 0, 0)
+	rawBson = append(rawBson, 0x00) // terminator
+
+	docLen := uint32(4 + len(rawBson))
+	fullBson := make([]byte, 4+len(rawBson))
+	fullBson[0] = byte(docLen)
+	fullBson[1] = byte(docLen >> 8)
+	fullBson[2] = byte(docLen >> 16)
+	fullBson[3] = byte(docLen >> 24)
+	copy(fullBson[4:], rawBson)
+
+	// OP_MSG body: 4 bytes flags + 1 byte section kind + bson
+	opMsgBody := append([]byte{0, 0, 0, 0, 0}, fullBson...)
+
+	if !isAuthError(opMsgBody) {
+		t.Error("expected isAuthError to be true when code:18 is preceded by subdocument")
+	}
+
+	// 2. Malformed BSON with invalid subdocument length (subLen < 5) must not hang or panic
+	malformed := []byte{
+		0, 0, 0, 0, 0, // OP_MSG header
+		20, 0, 0, 0, // docLen
+		0x03, 's', 'u', 'b', 0x00, // elemType 3
+		0, 0, 0, 0, // invalid subLen: 0!
+		0x00,
+	}
+	if isAuthError(malformed) {
+		t.Error("expected isAuthError to be false for malformed BSON")
+	}
+	if _, found := extractOpMsgCommandName(malformed); found {
+		t.Error("expected extractOpMsgCommandName to be false for malformed BSON")
+	}
+
+	// 3. Truncated buffer should return false safely
+	truncated := []byte{0, 0, 0, 0, 0, 100, 0, 0, 0, 0x02, 'a', 0x00}
+	if isAuthError(truncated) {
+		t.Error("expected false for truncated BSON")
+	}
+	if isAuthOk(truncated) {
+		t.Error("expected false for truncated BSON in isAuthOk")
+	}
+}

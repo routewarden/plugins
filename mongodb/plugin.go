@@ -335,6 +335,100 @@ func encodeBSONDoc(doc map[string]any) []byte {
 	return out
 }
 
+// skipBSONElementValue skips the value bytes of a BSON element given its type at pos.
+// Returns the new position, or -1 if the element is malformed or exceeds maxLen.
+func skipBSONElementValue(elemType byte, bson []byte, pos int, maxLen int) int {
+	switch elemType {
+	case 0x01: // double (8 bytes)
+		if pos+8 > maxLen {
+			return -1
+		}
+		return pos + 8
+	case 0x02: // string (4-byte len + bytes)
+		if pos+4 > maxLen {
+			return -1
+		}
+		strLen := int(binary.LittleEndian.Uint32(bson[pos : pos+4]))
+		if strLen < 0 || pos+4+strLen > maxLen {
+			return -1
+		}
+		return pos + 4 + strLen
+	case 0x03, 0x04: // document or array (4-byte total docLen)
+		if pos+4 > maxLen {
+			return -1
+		}
+		subLen := int(binary.LittleEndian.Uint32(bson[pos : pos+4]))
+		if subLen < 5 || pos+subLen > maxLen {
+			return -1
+		}
+		return pos + subLen
+	case 0x05: // binary (4-byte len + 1-byte subtype + data)
+		if pos+5 > maxLen {
+			return -1
+		}
+		binLen := int(binary.LittleEndian.Uint32(bson[pos : pos+4]))
+		if binLen < 0 || pos+5+binLen > maxLen {
+			return -1
+		}
+		return pos + 5 + binLen
+	case 0x06: // undefined (deprecated, 0 bytes)
+		return pos
+	case 0x07: // objectid (12 bytes)
+		if pos+12 > maxLen {
+			return -1
+		}
+		return pos + 12
+	case 0x08: // bool (1 byte)
+		if pos+1 > maxLen {
+			return -1
+		}
+		return pos + 1
+	case 0x09, 0x11, 0x12: // datetime, timestamp, int64 (8 bytes)
+		if pos+8 > maxLen {
+			return -1
+		}
+		return pos + 8
+	case 0x0a: // null (0 bytes)
+		return pos
+	case 0x0b: // regex (two null-terminated cstrings)
+		for pos < maxLen && bson[pos] != 0x00 {
+			pos++
+		}
+		if pos >= maxLen {
+			return -1
+		}
+		pos++ // skip null
+		for pos < maxLen && bson[pos] != 0x00 {
+			pos++
+		}
+		if pos >= maxLen {
+			return -1
+		}
+		return pos + 1
+	case 0x0d: // javascript code (string)
+		if pos+4 > maxLen {
+			return -1
+		}
+		strLen := int(binary.LittleEndian.Uint32(bson[pos : pos+4]))
+		if strLen < 0 || pos+4+strLen > maxLen {
+			return -1
+		}
+		return pos + 4 + strLen
+	case 0x10: // int32 (4 bytes)
+		if pos+4 > maxLen {
+			return -1
+		}
+		return pos + 4
+	case 0x13: // decimal128 (16 bytes)
+		if pos+16 > maxLen {
+			return -1
+		}
+		return pos + 16
+	default:
+		return -1
+	}
+}
+
 // extractOpMsgCommandName parses the command name from the BSON body document in an OP_MSG section.
 // It skips metadata keys (e.g. keys starting with '$', 'lsid', etc.) to find the actual command name.
 func extractOpMsgCommandName(body []byte) (string, bool) {
@@ -371,49 +465,18 @@ func extractOpMsgCommandName(body []byte) (string, bool) {
 		}
 
 		// Skip value based on elemType to continue to next key
-		switch elemType {
-		case 0x01: // double
-			pos += 8
-		case 0x02: // string
-			if pos+4 > docLen {
-				return "", false
-			}
-			strLen := int(binary.LittleEndian.Uint32(bson[pos : pos+4]))
-			pos += 4 + strLen
-		case 0x03, 0x04: // document or array
-			if pos+4 > docLen {
-				return "", false
-			}
-			subLen := int(binary.LittleEndian.Uint32(bson[pos : pos+4]))
-			pos += subLen
-		case 0x05: // binary
-			if pos+4 > docLen {
-				return "", false
-			}
-			binLen := int(binary.LittleEndian.Uint32(bson[pos : pos+4]))
-			pos += 4 + 1 + binLen
-		case 0x07: // objectid
-			pos += 12
-		case 0x08: // bool
-			pos += 1
-		case 0x09, 0x11, 0x12: // datetime, timestamp, int64
-			pos += 8
-		case 0x0a: // null
-			// 0 bytes
-		case 0x10: // int32
-			pos += 4
-		case 0x13: // decimal128
-			pos += 16
-		default:
+		newPos := skipBSONElementValue(elemType, bson, pos, docLen)
+		if newPos < 0 {
 			return "", false
 		}
+		pos = newPos
 	}
 	return "", false
 }
 
 // isAuthError checks if an OP_MSG response body contains an authentication error code.
 func isAuthError(body []byte) bool {
-	// Look for "code" field in BSON with value 18 (AuthenticationFailed) or 334 (SASL conversation)
+	// Look for "code" field in BSON with value 18 (AuthenticationFailed), 334 (SASL), 11 (UserNotFound), or 13 (Unauthorized)
 	if len(body) < 5 {
 		return false
 	}
@@ -421,55 +484,52 @@ func isAuthError(body []byte) bool {
 	if len(bson) < 4 {
 		return false
 	}
+	docLen := int(binary.LittleEndian.Uint32(bson[0:4]))
+	if docLen < 5 || docLen > len(bson) {
+		return false
+	}
 	pos := 4
-	for pos+1 < len(bson) {
+	for pos < docLen-1 {
 		elemType := bson[pos]
 		pos++
 		// Read key
 		start := pos
-		for pos < len(bson) && bson[pos] != 0x00 {
+		for pos < docLen && bson[pos] != 0x00 {
 			pos++
 		}
-		if pos >= len(bson) {
+		if pos >= docLen {
 			break
 		}
 		key := string(bson[start:pos])
 		pos++ // skip null terminator
 
-		switch elemType {
-		case 0x10: // int32
-			if pos+4 > len(bson) {
-				return false
+		if strings.ToLower(key) == "code" {
+			if elemType == 0x10 && pos+4 <= docLen {
+				val := int32(binary.LittleEndian.Uint32(bson[pos : pos+4]))
+				if val == 18 || val == 334 || val == 11 || val == 13 {
+					return true
+				}
+			} else if elemType == 0x12 && pos+8 <= docLen {
+				val := int64(binary.LittleEndian.Uint64(bson[pos : pos+8]))
+				if val == 18 || val == 334 || val == 11 || val == 13 {
+					return true
+				}
 			}
-			val := int32(binary.LittleEndian.Uint32(bson[pos : pos+4]))
-			pos += 4
-			if strings.ToLower(key) == "code" && (val == 18 || val == 334 || val == 11) {
-				return true
-			}
-		case 0x12: // int64
-			if pos+8 > len(bson) {
-				return false
-			}
-			val := int64(binary.LittleEndian.Uint64(bson[pos : pos+8]))
-			pos += 8
-			if strings.ToLower(key) == "code" && (val == 18 || val == 334 || val == 11) {
-				return true
-			}
-		case 0x01: // float64
-			pos += 8
-		case 0x02: // string
-			if pos+4 > len(bson) {
-				return false
-			}
+		} else if strings.ToLower(key) == "errmsg" && elemType == 0x02 && pos+4 <= docLen {
 			strLen := int(binary.LittleEndian.Uint32(bson[pos : pos+4]))
-			pos += 4 + strLen
-		case 0x08: // bool
-			pos++
-		case 0x00: // end of document
-			return false
-		default:
-			return false
+			if strLen > 1 && pos+4+strLen <= docLen {
+				msg := strings.ToLower(string(bson[pos+4 : pos+4+strLen-1]))
+				if strings.Contains(msg, "auth") && strings.Contains(msg, "fail") {
+					return true
+				}
+			}
 		}
+
+		newPos := skipBSONElementValue(elemType, bson, pos, docLen)
+		if newPos < 0 {
+			break
+		}
+		pos = newPos
 	}
 	return false
 }
@@ -483,55 +543,43 @@ func isAuthOk(body []byte) bool {
 	if len(bson) < 4 {
 		return false
 	}
+	docLen := int(binary.LittleEndian.Uint32(bson[0:4]))
+	if docLen < 5 || docLen > len(bson) {
+		return false
+	}
 	pos := 4
-	for pos+1 < len(bson) {
+	for pos < docLen-1 {
 		elemType := bson[pos]
 		pos++
 		start := pos
-		for pos < len(bson) && bson[pos] != 0x00 {
+		for pos < docLen && bson[pos] != 0x00 {
 			pos++
 		}
-		if pos >= len(bson) {
+		if pos >= docLen {
 			break
 		}
 		key := string(bson[start:pos])
 		pos++
 
-		switch elemType {
-		case 0x10: // int32
-			if pos+4 > len(bson) {
-				return false
+		if strings.ToLower(key) == "ok" {
+			if elemType == 0x10 && pos+4 <= docLen {
+				val := int32(binary.LittleEndian.Uint32(bson[pos : pos+4]))
+				if val == 1 {
+					return true
+				}
+			} else if elemType == 0x01 && pos+8 <= docLen {
+				bits := binary.LittleEndian.Uint64(bson[pos : pos+8])
+				if bits == 0x3FF0000000000000 { // 1.0
+					return true
+				}
 			}
-			val := int32(binary.LittleEndian.Uint32(bson[pos : pos+4]))
-			pos += 4
-			if strings.ToLower(key) == "ok" && val == 1 {
-				return true
-			}
-		case 0x01: // float64
-			if pos+8 > len(bson) {
-				return false
-			}
-			// MongoDB sends ok as float64 1.0
-			bits := binary.LittleEndian.Uint64(bson[pos : pos+8])
-			pos += 8
-			if strings.ToLower(key) == "ok" && bits == 0x3FF0000000000000 { // 1.0
-				return true
-			}
-		case 0x02: // string
-			if pos+4 > len(bson) {
-				return false
-			}
-			strLen := int(binary.LittleEndian.Uint32(bson[pos : pos+4]))
-			pos += 4 + strLen
-		case 0x08: // bool
-			pos++
-		case 0x12: // int64
-			pos += 8
-		case 0x00:
-			return false
-		default:
-			return false
 		}
+
+		newPos := skipBSONElementValue(elemType, bson, pos, docLen)
+		if newPos < 0 {
+			break
+		}
+		pos = newPos
 	}
 	return false
 }

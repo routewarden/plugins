@@ -1,9 +1,11 @@
 package mysql
 
 import (
+	"bytes"
 	"encoding/binary"
 	"io"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/routewarden/tcp-warden/plugins/sdk"
@@ -240,3 +242,72 @@ func TestMySQL_ValidateConfig(t *testing.T) {
 		t.Errorf("expected error for non-int max_auth_failures")
 	}
 }
+
+func TestMySQL_SecurityBoundaries(t *testing.T) {
+	// 1. Oversized packet payload length (>4MB) must be rejected
+	var oversizedHeader [4]byte
+	oversizedHeader[0] = 0x01
+	oversizedHeader[1] = 0x00
+	oversizedHeader[2] = 0x41 // 4MB + 64KB
+	oversizedHeader[3] = 0x00
+
+	r := bytes.NewReader(oversizedHeader[:])
+	_, err := readMySQLPacket(r)
+	if err == nil || !strings.Contains(err.Error(), "exceeds max 4MB") {
+		t.Errorf("expected payload length error for >4MB packet, got: %v", err)
+	}
+
+	// 2. Unexpected server packet header terminates handshake safely
+	clientConn, clientPeer := net.Pipe()
+	defer clientConn.Close()
+	defer clientPeer.Close()
+
+	upConn, upPeer := net.Pipe()
+	defer upConn.Close()
+	defer upPeer.Close()
+
+	insp := &Inspector{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		res, blocked, _, _ := insp.Run(nil, clientConn, upConn)
+		if blocked {
+			t.Errorf("unexpected blocked on unexpected packet")
+		}
+		if res.Err == nil || !strings.Contains(res.Err.Error(), "unrecognized MySQL packet header") {
+			t.Errorf("expected unrecognized MySQL packet header error, got: %v", res.Err)
+		}
+	}()
+
+	// Upstream sends handshake
+	handshakePkt := makeMySQLPacket(0, []byte("\n8.0.32\x00"))
+	go func() {
+		_, _ = upPeer.Write(handshakePkt)
+	}()
+
+	buf := make([]byte, len(handshakePkt))
+	_, _ = io.ReadFull(clientPeer, buf)
+
+	// Client sends response
+	clientRespPkt := makeMySQLPacket(1, make([]byte, 32))
+	go func() {
+		_, _ = clientPeer.Write(clientRespPkt)
+	}()
+
+	buf = make([]byte, len(clientRespPkt))
+	_, _ = io.ReadFull(upPeer, buf)
+
+	// Upstream sends unexpected packet (0x42)
+	unexpectedPkt := makeMySQLPacket(2, []byte{0x42, 0x01, 0x02})
+	go func() {
+		_, _ = upPeer.Write(unexpectedPkt)
+	}()
+
+	buf = make([]byte, len(unexpectedPkt))
+	_, _ = io.ReadFull(clientPeer, buf)
+
+	_ = clientPeer.Close()
+	_ = upPeer.Close()
+	<-done
+}
+
