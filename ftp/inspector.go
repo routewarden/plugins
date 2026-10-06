@@ -2,6 +2,9 @@ package ftp
 
 import (
 	"bufio"
+	"errors"
+	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -14,6 +17,28 @@ import (
 // Inspector inspects FTP wire sessions (RFC 959).
 type Inspector struct {
 	MaxAuthFailures int
+}
+
+var errLineTooLong = errors.New("ftp: line too long")
+
+func readBoundedLine(r *bufio.Reader, maxLen int) (string, error) {
+	var buf []byte
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			if len(buf) > 0 && err == io.EOF {
+				return string(buf), nil
+			}
+			return string(buf), err
+		}
+		buf = append(buf, b)
+		if b == '\n' {
+			return string(buf), nil
+		}
+		if len(buf) >= maxLen {
+			return string(buf), errLineTooLong
+		}
+	}
 }
 
 // Run executes the FTP inspection and relay loop.
@@ -42,10 +67,15 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		return result(err), false, "", err
 	}
 
+	authFailures := 0
+
 	for {
 		client.SetReadDeadline(time.Now().Add(5 * time.Minute))
-		clientLine, err := clientReader.ReadString('\n')
+		clientLine, err := readBoundedLine(clientReader, 4096)
 		if err != nil {
+			if errors.Is(err, errLineTooLong) {
+				_, _ = client.Write([]byte("500 Line too long\r\n"))
+			}
 			return result(err), false, "", nil
 		}
 		bytesIn.Add(int64(len(clientLine)))
@@ -88,10 +118,22 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		// Check for authentication failure on PASS command
 		if strings.HasPrefix(upper, "PASS ") || upper == "PASS" {
 			if strings.HasPrefix(serverResp, "530") {
+				authFailures++
 				if ctx != nil {
 					ctx.OnAuthFailure()
 					ctx.OnSecurityEvent("auth_failure", "ftp_login_failed")
 				}
+				if insp.MaxAuthFailures > 0 && authFailures >= insp.MaxAuthFailures {
+					errMsg := "421 Too many authentication failures\r\n"
+					_, _ = client.Write([]byte(errMsg))
+					bytesOut.Add(int64(len(errMsg)))
+					if ctx != nil {
+						ctx.OnSecurityEvent("blocked", "ftp_max_auth_failures_exceeded")
+					}
+					return result(nil), true, fmt.Sprintf("max auth failures exceeded (%d)", authFailures), nil
+				}
+			} else if strings.HasPrefix(serverResp, "230") {
+				authFailures = 0
 			}
 		}
 
@@ -109,12 +151,20 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 
 func readFTPResponse(r *bufio.Reader) (string, error) {
 	var sb strings.Builder
+	const maxResponseLen = 65536
 	for {
-		line, err := r.ReadString('\n')
+		line, err := readBoundedLine(r, 8192)
 		if err != nil {
+			if sb.Len() > 0 && err == io.EOF {
+				sb.WriteString(line)
+				return sb.String(), nil
+			}
 			return sb.String(), err
 		}
 		sb.WriteString(line)
+		if sb.Len() > maxResponseLen {
+			return sb.String(), errors.New("ftp: response too large")
+		}
 		if len(line) >= 4 && line[3] == ' ' && isDigit(line[0]) && isDigit(line[1]) && isDigit(line[2]) {
 			break
 		}

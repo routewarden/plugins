@@ -180,8 +180,14 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 
 	for {
 		client.SetReadDeadline(time.Now().Add(5 * time.Minute))
-		line, err := clientReader.ReadString('\n')
+		line, err := readBoundedLine(clientReader, 4096)
 		if err != nil {
+			if errors.Is(err, errLineTooLong) {
+				errMsg := "CLIENT_ERROR line too long\r\n"
+				client.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				_, _ = client.Write([]byte(errMsg))
+				bytesOut.Add(int64(len(errMsg)))
+			}
 			if err == io.EOF {
 				return result(nil), false, "", nil
 			}
@@ -223,16 +229,27 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		if isStorageCommand(cmd) {
 			// Format: <cmd> <key> <flags> <exptime> <bytes> [noreply]\r\n<data>\r\n
 			if len(fields) >= 5 {
-				dataLen := 0
-				fmt.Sscanf(fields[4], "%d", &dataLen)
-				if dataLen >= 0 && dataLen <= 1024*1024 { // max 1MB value
-					dataBuf := make([]byte, dataLen+2) // +2 for \r\n
-					if _, err := io.ReadFull(clientReader, dataBuf); err != nil {
-						return result(err), false, "", nil
-					}
-					bytesIn.Add(int64(len(dataBuf)))
-					extraData = dataBuf
+				dataLen := -1
+				if _, err := fmt.Sscanf(fields[4], "%d", &dataLen); err != nil || dataLen < 0 {
+					errMsg := "CLIENT_ERROR bad command-line format\r\n"
+					client.SetWriteDeadline(time.Now().Add(5 * time.Second))
+					_, _ = client.Write([]byte(errMsg))
+					bytesOut.Add(int64(len(errMsg)))
+					return result(nil), true, "invalid storage length", nil
 				}
+				if dataLen > 1024*1024 { // max 1MB value
+					errMsg := "SERVER_ERROR object too large for cache\r\n"
+					client.SetWriteDeadline(time.Now().Add(5 * time.Second))
+					_, _ = client.Write([]byte(errMsg))
+					bytesOut.Add(int64(len(errMsg)))
+					return result(nil), true, "storage data length exceeds 1MB", nil
+				}
+				dataBuf := make([]byte, dataLen+2) // +2 for \r\n
+				if _, err := io.ReadFull(clientReader, dataBuf); err != nil {
+					return result(err), false, "", nil
+				}
+				bytesIn.Add(int64(len(dataBuf)))
+				extraData = dataBuf
 			}
 		}
 
@@ -319,4 +336,26 @@ func isStorageCommand(cmd string) bool {
 		return true
 	}
 	return false
+}
+
+var errLineTooLong = errors.New("memcached: line too long")
+
+func readBoundedLine(r *bufio.Reader, maxLen int) (string, error) {
+	var buf []byte
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			if len(buf) > 0 && err == io.EOF {
+				return string(buf), nil
+			}
+			return string(buf), err
+		}
+		buf = append(buf, b)
+		if b == '\n' {
+			return string(buf), nil
+		}
+		if len(buf) >= maxLen {
+			return string(buf), errLineTooLong
+		}
+	}
 }

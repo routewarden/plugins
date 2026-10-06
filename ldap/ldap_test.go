@@ -96,3 +96,51 @@ func TestLDAP_BlockedDN(t *testing.T) {
 		t.Fatal("test timed out")
 	}
 }
+
+func TestLDAP_SecurityBoundaries(t *testing.T) {
+	t.Run("BaseDN_SuffixSpoofingPrevented", func(t *testing.T) {
+		insp := &Inspector{
+			AllowedBaseDNs: []string{"dc=corp,dc=local"},
+		}
+
+		// Exact match should be allowed (not blocked)
+		if insp.isDNBlocked("dc=corp,dc=local") {
+			t.Errorf("expected base DN itself to be allowed")
+		}
+
+		// Sub-DN should be allowed
+		if insp.isDNBlocked("cn=alice,ou=users,dc=corp,dc=local") {
+			t.Errorf("expected sub-DN under corp.local to be allowed")
+		}
+
+		// Suffix spoofing (evilcorp.local vs corp.local) MUST be blocked
+		if !insp.isDNBlocked("cn=mallory,ou=users,dc=evilcorp,dc=local") {
+			t.Errorf("expected evilcorp.local to be blocked as outside base DN")
+		}
+	})
+
+	t.Run("BlockedDN_WhitespaceEvasionPrevented", func(t *testing.T) {
+		insp := &Inspector{
+			BlockedDNs: []string{"cn=root,dc=company,dc=org"},
+		}
+
+		// Spaces after commas should still be detected as blocked
+		if !insp.isDNBlocked("cn=root, dc=company, dc=org") {
+			t.Errorf("expected spaced DN to match blocked DN")
+		}
+
+		if !insp.isDNBlocked("cn=root ,dc=company , dc=org") {
+			t.Errorf("expected spaced DN to match blocked DN")
+		}
+	})
+
+	t.Run("BER_IndefiniteLengthRejected", func(t *testing.T) {
+		// 0x80 is BER indefinite length (numBytes == 0)
+		data := []byte{0x80, 0x01, 0x02}
+		lenVal, read := decodeBERLength(data)
+		if read != 0 || lenVal != 0 {
+			t.Errorf("expected indefinite length 0x80 to be rejected, got len=%d read=%d", lenVal, read)
+		}
+	})
+}
+

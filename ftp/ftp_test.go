@@ -317,4 +317,119 @@ func TestFTPPlugin_MultilineGreeting(t *testing.T) {
 	}
 }
 
+func TestFTP_SecurityBoundaries(t *testing.T) {
+	t.Run("MaxAuthFailures_BlocksConnection", func(t *testing.T) {
+		clientA, clientB := net.Pipe()
+		defer clientA.Close()
+		defer clientPeerClose(clientB)
+
+		upA, upB := net.Pipe()
+		defer upA.Close()
+		defer clientPeerClose(upB)
+
+		insp := &Inspector{MaxAuthFailures: 2}
+		done := make(chan struct {
+			blocked bool
+			reason  string
+		}, 1)
+
+		go func() {
+			_, blocked, reason, _ := insp.Run(nil, clientB, upA)
+			done <- struct {
+				blocked bool
+				reason  string
+			}{blocked, reason}
+		}()
+
+		// Upstream server mock
+		go func() {
+			_, _ = upB.Write([]byte("220 Welcome\r\n"))
+			buf := make([]byte, 128)
+			for {
+				n, err := upB.Read(buf)
+				if err != nil {
+					return
+				}
+				cmd := string(buf[:n])
+				if strings.HasPrefix(cmd, "USER") {
+					_, _ = upB.Write([]byte("331 Need pass\r\n"))
+				} else if strings.HasPrefix(cmd, "PASS") {
+					_, _ = upB.Write([]byte("530 Login incorrect.\r\n"))
+				}
+			}
+		}()
+
+		// Client
+		buf := make([]byte, 256)
+		_, _ = clientA.Read(buf) // 220
+
+		// Fail 1
+		_, _ = clientA.Write([]byte("USER user1\r\n"))
+		_, _ = clientA.Read(buf) // 331
+		_, _ = clientA.Write([]byte("PASS wrong1\r\n"))
+		_, _ = clientA.Read(buf) // 530
+
+		// Fail 2 - should trigger 421 and disconnect
+		_, _ = clientA.Write([]byte("USER user1\r\n"))
+		_, _ = clientA.Read(buf) // 331
+		_, _ = clientA.Write([]byte("PASS wrong2\r\n"))
+
+		n, _ := clientA.Read(buf)
+		resp := string(buf[:n])
+		if !strings.Contains(resp, "421 Too many authentication failures") {
+			t.Errorf("expected 421 response on exceeding max auth failures, got: %s", resp)
+		}
+
+		res := <-done
+		if !res.blocked {
+			t.Errorf("expected connection to be marked blocked")
+		}
+	})
+
+	t.Run("LineTooLong_Returns500", func(t *testing.T) {
+		clientA, clientB := net.Pipe()
+		defer clientA.Close()
+		defer clientB.Close()
+
+		upA, upB := net.Pipe()
+		defer upA.Close()
+		defer upB.Close()
+
+		insp := &Inspector{}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _, _, _ = insp.Run(nil, clientB, upA)
+		}()
+
+		go func() {
+			_, _ = upB.Write([]byte("220 Welcome\r\n"))
+		}()
+
+		buf := make([]byte, 128)
+		_, _ = clientA.Read(buf) // 220
+
+		oversized := strings.Repeat("B", 4100)
+		go func() {
+			_, _ = clientA.Write([]byte(oversized))
+		}()
+
+		n, _ := clientA.Read(buf)
+		if !strings.HasPrefix(string(buf[:n]), "500") {
+			t.Errorf("expected 500 Line too long, got: %s", string(buf[:n]))
+		}
+
+		_ = clientA.Close()
+		_ = upA.Close()
+		<-done
+	})
+}
+
+func clientPeerClose(c net.Conn) {
+	if c != nil {
+		_ = c.Close()
+	}
+}
+
+
 

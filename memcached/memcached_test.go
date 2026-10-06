@@ -338,3 +338,83 @@ func TestMemcached_NoReplyHandling(t *testing.T) {
 	<-done
 }
 
+func TestMemcached_SecurityBoundaries(t *testing.T) {
+	t.Run("StorageDataLength_TooLarge", func(t *testing.T) {
+		clientA, clientB := net.Pipe()
+		defer clientA.Close()
+		defer clientB.Close()
+
+		upA, upB := net.Pipe()
+		defer upA.Close()
+		defer upB.Close()
+
+		insp := &Inspector{BlockedCommands: []string{"flush_all"}}
+		insp.buildLookup()
+
+		done := make(chan struct {
+			blocked bool
+			reason  string
+		}, 1)
+
+		go func() {
+			_, blocked, reason, _ := insp.Run(nil, clientB, upA)
+			done <- struct {
+				blocked bool
+				reason  string
+			}{blocked, reason}
+		}()
+
+		// Client sends storage command with >1MB data length
+		go func() {
+			_, _ = clientA.Write([]byte("set bigkey 0 0 5000000\r\n"))
+		}()
+
+		var buf [128]byte
+		n, _ := clientA.Read(buf[:])
+		resp := string(buf[:n])
+		if !strings.HasPrefix(resp, "SERVER_ERROR") {
+			t.Errorf("expected SERVER_ERROR for oversized storage data length, got: %s", resp)
+		}
+
+		res := <-done
+		if !res.blocked {
+			t.Errorf("expected session to be marked blocked")
+		}
+	})
+
+	t.Run("LineTooLong_ReturnsClientError", func(t *testing.T) {
+		clientA, clientB := net.Pipe()
+		defer clientA.Close()
+		defer clientB.Close()
+
+		upA, upB := net.Pipe()
+		defer upA.Close()
+		defer upB.Close()
+
+		insp := &Inspector{}
+		insp.buildLookup()
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _, _, _ = insp.Run(nil, clientB, upA)
+		}()
+
+		oversized := strings.Repeat("M", 4100)
+		go func() {
+			_, _ = clientA.Write([]byte(oversized))
+		}()
+
+		var buf [128]byte
+		n, _ := clientA.Read(buf[:])
+		if !strings.HasPrefix(string(buf[:n]), "CLIENT_ERROR") {
+			t.Errorf("expected CLIENT_ERROR Line too long, got: %s", string(buf[:n]))
+		}
+
+		_ = clientA.Close()
+		_ = upA.Close()
+		<-done
+	})
+}
+
+

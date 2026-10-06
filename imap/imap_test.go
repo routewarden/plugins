@@ -151,3 +151,111 @@ func TestIMAP_ValidateConfig(t *testing.T) {
 		t.Errorf("expected error for non-int max_auth_failures")
 	}
 }
+
+func TestIMAP_SecurityBoundaries(t *testing.T) {
+	t.Run("MaxAuthFailures_BlocksConnection", func(t *testing.T) {
+		clientA, clientB := net.Pipe()
+		defer clientA.Close()
+		defer clientB.Close()
+
+		upA, upB := net.Pipe()
+		defer upA.Close()
+		defer upB.Close()
+
+		insp := &Inspector{MaxAuthFailures: 2}
+		done := make(chan struct {
+			blocked bool
+			reason  string
+		}, 1)
+
+		go func() {
+			_, blocked, reason, _ := insp.Run(nil, clientB, upA)
+			done <- struct {
+				blocked bool
+				reason  string
+			}{blocked, reason}
+		}()
+
+		// Upstream mock
+		go func() {
+			_, _ = upB.Write([]byte("* OK Dovecot ready\r\n"))
+			buf := make([]byte, 256)
+			for {
+				n, err := upB.Read(buf)
+				if err != nil {
+					return
+				}
+				parts := strings.Fields(string(buf[:n]))
+				if len(parts) >= 2 && strings.ToUpper(parts[1]) == "LOGIN" {
+					_, _ = upB.Write([]byte(parts[0] + " NO Authentication failed\r\n"))
+				}
+			}
+		}()
+
+		buf := make([]byte, 256)
+		_, _ = clientA.Read(buf) // Greeting
+
+		// Fail 1
+		_, _ = clientA.Write([]byte("A01 LOGIN user wrong1\r\n"))
+		_, _ = clientA.Read(buf) // NO
+
+		// Fail 2
+		_, _ = clientA.Write([]byte("A02 LOGIN user wrong2\r\n"))
+		n, _ := clientA.Read(buf) // Should receive A02 NO or * BYE
+		resp := string(buf[:n])
+		if !strings.Contains(resp, "NO") {
+			t.Errorf("expected tagged NO response, got %s", resp)
+		}
+
+		// Subsequent read should get * BYE
+		n, _ = clientA.Read(buf)
+		bye := string(buf[:n])
+		if !strings.Contains(bye, "* BYE Too many authentication failures") {
+			t.Errorf("expected BYE message, got %s", bye)
+		}
+
+		res := <-done
+		if !res.blocked {
+			t.Errorf("expected session to be marked blocked")
+		}
+	})
+
+	t.Run("LineTooLong_ReturnsBad", func(t *testing.T) {
+		clientA, clientB := net.Pipe()
+		defer clientA.Close()
+		defer clientB.Close()
+
+		upA, upB := net.Pipe()
+		defer upA.Close()
+		defer upB.Close()
+
+		insp := &Inspector{}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _, _, _ = insp.Run(nil, clientB, upA)
+		}()
+
+		go func() {
+			_, _ = upB.Write([]byte("* OK Dovecot ready\r\n"))
+		}()
+
+		buf := make([]byte, 128)
+		_, _ = clientA.Read(buf) // Greeting
+
+		oversized := strings.Repeat("C", 4100)
+		go func() {
+			_, _ = clientA.Write([]byte(oversized))
+		}()
+
+		n, _ := clientA.Read(buf)
+		if !strings.HasPrefix(string(buf[:n]), "* BAD") {
+			t.Errorf("expected * BAD Line too long, got: %s", string(buf[:n]))
+		}
+
+		_ = clientA.Close()
+		_ = upA.Close()
+		<-done
+	})
+}
+

@@ -207,3 +207,146 @@ func TestSMTP_ValidateConfig(t *testing.T) {
 		t.Errorf("expected error for non-int max_recipients")
 	}
 }
+
+func TestSMTP_SecurityBoundaries(t *testing.T) {
+	t.Run("MaxRecipients_Enforced", func(t *testing.T) {
+		clientConn, clientPeer := net.Pipe()
+		defer clientConn.Close()
+		defer clientPeer.Close()
+
+		upConn, upPeer := net.Pipe()
+		defer upConn.Close()
+		defer upPeer.Close()
+
+		insp := &Inspector{MaxRecipients: 2}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _, _, _ = insp.Run(nil, clientConn, upConn)
+		}()
+
+		// Upstream greeting
+		go func() {
+			_, _ = upPeer.Write([]byte("220 smtp.example.com ESMTP\r\n"))
+		}()
+
+		var buf [256]byte
+		n, _ := clientPeer.Read(buf[:])
+		if !strings.HasPrefix(string(buf[:n]), "220") {
+			t.Fatalf("unexpected greeting: %s", string(buf[:n]))
+		}
+
+		// Client sends RCPT 1 & 2 (forwarded to upstream)
+		go func() {
+			for i := 0; i < 2; i++ {
+				_, _ = upPeer.Read(buf[:])
+				_, _ = upPeer.Write([]byte("250 2.1.5 Recipient OK\r\n"))
+			}
+		}()
+
+		_, _ = clientPeer.Write([]byte("RCPT TO:<u1@example.com>\r\n"))
+		n, _ = clientPeer.Read(buf[:])
+		if !strings.HasPrefix(string(buf[:n]), "250") {
+			t.Errorf("expected 250 for recipient 1, got %s", string(buf[:n]))
+		}
+
+		_, _ = clientPeer.Write([]byte("RCPT TO:<u2@example.com>\r\n"))
+		n, _ = clientPeer.Read(buf[:])
+		if !strings.HasPrefix(string(buf[:n]), "250") {
+			t.Errorf("expected 250 for recipient 2, got %s", string(buf[:n]))
+		}
+
+		// Third recipient exceeds max_recipients=2, RouteWarden intercepts with 452
+		_, _ = clientPeer.Write([]byte("RCPT TO:<u3@example.com>\r\n"))
+		n, _ = clientPeer.Read(buf[:])
+		if !strings.HasPrefix(string(buf[:n]), "452") {
+			t.Errorf("expected 452 for recipient 3, got %s", string(buf[:n]))
+		}
+
+		_ = clientPeer.Close()
+		_ = upPeer.Close()
+		<-done
+	})
+
+	t.Run("RequireSTARTTLS_RejectsPlaintextAuthAndMail", func(t *testing.T) {
+		clientConn, clientPeer := net.Pipe()
+		defer clientConn.Close()
+		defer clientPeer.Close()
+
+		upConn, upPeer := net.Pipe()
+		defer upConn.Close()
+		defer upPeer.Close()
+
+		insp := &Inspector{RequireSTARTTLS: true}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _, _, _ = insp.Run(nil, clientConn, upConn)
+		}()
+
+		go func() {
+			_, _ = upPeer.Write([]byte("220 smtp.example.com ESMTP\r\n"))
+		}()
+
+		var buf [256]byte
+		_, _ = clientPeer.Read(buf[:]) // 220
+
+		// Client sends AUTH before STARTTLS
+		_, _ = clientPeer.Write([]byte("AUTH LOGIN\r\n"))
+		n, _ := clientPeer.Read(buf[:])
+		if !strings.HasPrefix(string(buf[:n]), "530") {
+			t.Errorf("expected 530 Must issue STARTTLS, got %s", string(buf[:n]))
+		}
+
+		// Client sends MAIL FROM before STARTTLS
+		_, _ = clientPeer.Write([]byte("MAIL FROM:<test@example.com>\r\n"))
+		n, _ = clientPeer.Read(buf[:])
+		if !strings.HasPrefix(string(buf[:n]), "530") {
+			t.Errorf("expected 530 Must issue STARTTLS, got %s", string(buf[:n]))
+		}
+
+		_ = clientPeer.Close()
+		_ = upPeer.Close()
+		<-done
+	})
+
+	t.Run("LineTooLong_Returns500", func(t *testing.T) {
+		clientConn, clientPeer := net.Pipe()
+		defer clientConn.Close()
+		defer clientPeer.Close()
+
+		upConn, upPeer := net.Pipe()
+		defer upConn.Close()
+		defer upPeer.Close()
+
+		insp := &Inspector{}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _, _, _ = insp.Run(nil, clientConn, upConn)
+		}()
+
+		go func() {
+			_, _ = upPeer.Write([]byte("220 smtp.example.com ESMTP\r\n"))
+		}()
+
+		var buf [256]byte
+		_, _ = clientPeer.Read(buf[:]) // 220
+
+		// Send oversized line (> 4096 bytes without newline)
+		oversized := strings.Repeat("A", 4100)
+		go func() {
+			_, _ = clientPeer.Write([]byte(oversized))
+		}()
+
+		n, _ := clientPeer.Read(buf[:])
+		if !strings.HasPrefix(string(buf[:n]), "500") {
+			t.Errorf("expected 500 Line too long, got %s", string(buf[:n]))
+		}
+
+		_ = clientPeer.Close()
+		_ = upPeer.Close()
+		<-done
+	})
+}
+
