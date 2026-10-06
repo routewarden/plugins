@@ -1,6 +1,7 @@
 package minecraft
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -90,22 +91,12 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 }
 
 func readVarInt(b []byte) (int, int, error) {
-	var result uint32
-	var numRead int
-	for {
-		if numRead >= len(b) {
+	val, n := binary.Uvarint(b)
+	if n <= 0 {
+		if n == 0 {
 			return 0, 0, io.ErrUnexpectedEOF
 		}
-		read := b[numRead]
-		value := uint32(read & 0x7F)
-		result |= (value << (7 * numRead))
-		numRead++
-		if numRead > 5 {
-			return 0, 0, fmt.Errorf("VarInt too big")
-		}
-		if (read & 0x80) == 0 {
-			break
-		}
+		return 0, 0, fmt.Errorf("VarInt too big")
 	}
-	return int(result), numRead, nil
+	return int(uint32(val)), n, nil
 }
