@@ -186,6 +186,15 @@ func TestMQTT_Run_MaxClientIDLen(t *testing.T) {
 		_, _ = clientPeer.Write(buildMQTTConnect("too-long-client-id"))
 	}()
 
+	// Client should receive MQTT CONNACK return code 2 (Identifier rejected: 0x20, 0x02, 0x00, 0x02)
+	connack := make([]byte, 4)
+	if _, err := io.ReadFull(clientPeer, connack); err != nil {
+		t.Fatalf("failed reading rejection connack: %v", err)
+	}
+	if connack[0] != 0x20 || connack[3] != 0x02 {
+		t.Errorf("expected CONNACK code 2 (identifier rejected), got %v", connack)
+	}
+
 	<-done
 }
 

@@ -75,6 +75,12 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 
 	// 4. Validate ClientID
 	if insp.MaxClientIDLen > 0 && len(clientID) > insp.MaxClientIDLen {
+		connack := []byte{0x20, 0x02, 0x00, 0x02} // Identifier rejected
+		_, _ = client.Write(connack)
+		bytesOut.Add(int64(len(connack)))
+		if ctx != nil {
+			ctx.OnSecurityEvent("blocked", "blocked_mqtt_client_id_too_long")
+		}
 		return result(nil), true, fmt.Sprintf("MQTT ClientID exceeds max allowed length (%d > %d)", len(clientID), insp.MaxClientIDLen), nil
 	}
 
