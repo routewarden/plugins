@@ -281,3 +281,33 @@ func TestHTTP_ValidateRegexConfig(t *testing.T) {
 		t.Fatal("expected error for invalid blocked_headers regex, got nil")
 	}
 }
+
+func TestHTTP_IPv6HostAndApexDomain(t *testing.T) {
+	if !isHostAllowed("::1", []string{"::1"}) {
+		t.Errorf("expected ::1 to be allowed")
+	}
+	if !isHostAllowed("example.com", []string{"*.example.com"}) {
+		t.Errorf("expected apex domain example.com to match *.example.com")
+	}
+	if !isHostAllowed("sub.example.com", []string{"*.example.com"}) {
+		t.Errorf("expected subdomain sub.example.com to match *.example.com")
+	}
+	if isHostAllowed("other.com", []string{"*.example.com"}) {
+		t.Errorf("expected other.com to be disallowed")
+	}
+}
+
+func TestHTTP_PathTraversalEscape(t *testing.T) {
+	allowed := []string{"/api/*"}
+	// Legitimate path
+	if !isPathAllowed("/api/v1/users", allowed) {
+		t.Errorf("expected /api/v1/users to be allowed")
+	}
+	// Path traversal attempt attempting to escape /api/*
+	if isPathAllowed("/api/../.env", allowed) {
+		t.Errorf("expected /api/../.env to be rejected as traversal escape")
+	}
+	if isPathAllowed("/api/../../etc/passwd", allowed) {
+		t.Errorf("expected /api/../../etc/passwd to be rejected as traversal escape")
+	}
+}
