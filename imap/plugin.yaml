@@ -1,5 +1,5 @@
 name: imap
-version: "2.0.0"
+version: "2.0.1"
 manifest_version: "1.0.0"
 description: "IMAP4rev1 mail retrieval protocol inspector with auth brute-force tracking (NO/BAD)"
 author: "RouteWarden Team"

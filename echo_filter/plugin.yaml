@@ -1,5 +1,5 @@
 name: echo_filter
-version: "2.0.1"
+version: "2.0.2"
 manifest_version: "1.0.0"
 description: Example custom RouteWarden plugin that scans client payloads for banned signature strings or exploit keywords
 author: Community Contributor

@@ -1,5 +1,5 @@
 name: ssh
-version: "2.0.0"
+version: "2.0.1"
 manifest_version: "1.0.0"
 description: "SSH protocol guard with banner validation, version checks, and SSH_MSG_USERAUTH_FAILURE brute-force detection"
 author: "RouteWarden Team"
