@@ -518,8 +518,8 @@ func isPathAllowed(reqPath string, allowedPaths []string) bool {
 		if allowed == "*" {
 			return true
 		}
-		if strings.HasSuffix(allowed, "*") {
-			prefix := strings.TrimSuffix(allowed, "*")
+		if before, ok :=strings.CutSuffix(allowed, "*"); ok  {
+			prefix := before
 			if strings.HasPrefix(cleaned, prefix) {
 				return true
 			}
