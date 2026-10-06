@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"bufio"
 	"context"
 	"io"
 	"net"
@@ -190,3 +191,90 @@ func TestRedis_Run_AuthFailureTrigger(t *testing.T) {
 		t.Errorf("expected 1 auth failure recorded, got %d", mockCtx.authFailures)
 	}
 }
+
+func TestRedis_Run_SubscribeStreaming(t *testing.T) {
+	insp := NewInspector([]string{"FLUSHALL"})
+
+	clientConn, clientPeer := net.Pipe()
+	defer clientConn.Close()
+	defer clientPeer.Close()
+
+	upConn, upPeer := net.Pipe()
+	defer upConn.Close()
+	defer upPeer.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _, _ = insp.Run(nil, clientConn, upConn)
+	}()
+
+	// Client sends SUBSCRIBE alerts\r\n
+	subCmd := "*2\r\n$9\r\nSUBSCRIBE\r\n$6\r\nalerts\r\n"
+	go func() {
+		_, _ = clientPeer.Write([]byte(subCmd))
+	}()
+
+	// Upstream receives command
+	upBuf := make([]byte, len(subCmd))
+	if _, err := io.ReadFull(upPeer, upBuf); err != nil {
+		t.Fatalf("upstream failed reading: %v", err)
+	}
+	if string(upBuf) != subCmd {
+		t.Errorf("expected %q, got %q", subCmd, string(upBuf))
+	}
+
+	// Upstream sends initial subscription confirmation: *3\r\n$9\r\nsubscribe\r\n$6\r\nalerts\r\n:1\r\n
+	subConfirm := "*3\r\n$9\r\nsubscribe\r\n$6\r\nalerts\r\n:1\r\n"
+	go func() {
+		_, _ = upPeer.Write([]byte(subConfirm))
+	}()
+
+	// Client receives confirmation
+	clientBuf := make([]byte, len(subConfirm))
+	if _, err := io.ReadFull(clientPeer, clientBuf); err != nil {
+		t.Fatalf("client failed reading confirmation: %v", err)
+	}
+	if string(clientBuf) != subConfirm {
+		t.Errorf("expected %q, got %q", subConfirm, string(clientBuf))
+	}
+
+	// Now in pub/sub streaming mode! Upstream pushes a message asynchronously WITHOUT client sending a command
+	pushMsg := "*3\r\n$7\r\nmessage\r\n$6\r\nalerts\r\n$5\r\nfire!\r\n"
+	go func() {
+		_, _ = upPeer.Write([]byte(pushMsg))
+	}()
+
+	// Client receives push message directly
+	msgBuf := make([]byte, len(pushMsg))
+	if _, err := io.ReadFull(clientPeer, msgBuf); err != nil {
+		t.Fatalf("client failed reading async push: %v", err)
+	}
+	if string(msgBuf) != pushMsg {
+		t.Errorf("expected push message %q, got %q", pushMsg, string(msgBuf))
+	}
+
+	_ = clientPeer.Close()
+	_ = upPeer.Close()
+	<-done
+}
+
+func TestRedis_SecurityBoundaries(t *testing.T) {
+	// 1. Nested arrays exceeding recursion limit (>32)
+	deepResp := strings.Repeat("*1\r\n", 35) + "+OK\r\n"
+	r := bufio.NewReader(strings.NewReader(deepResp))
+	_, err := readRedisResponse(r)
+	if err == nil || !strings.Contains(err.Error(), "nesting depth exceeds limit") {
+		t.Errorf("expected nesting depth error for deeply nested response, got: %v", err)
+	}
+
+	// 2. Client oversized bulk string length (>64MB)
+	cmd := "*1\r\n$70000000\r\n"
+	cmdR := bufio.NewReader(strings.NewReader(cmd))
+	_, _, err = readRedisCommand(cmdR)
+	if err == nil || !strings.Contains(err.Error(), "exceeds max size 64MB") {
+		t.Errorf("expected max size error for >64MB bulk string, got: %v", err)
+	}
+}
+
+

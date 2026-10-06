@@ -2,6 +2,7 @@ package smtp
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -58,17 +59,35 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 	}
 
 	inAuthExchange := false
+	tlsActive := false
+	rcptCount := 0
 
 	for {
 		client.SetReadDeadline(time.Now().Add(5 * time.Minute))
-		clientLine, err := clientReader.ReadString('\n')
+		clientLine, err := readBoundedLine(clientReader, 4096)
 		if err != nil {
-			return result(nil), false, "", nil
+			if errors.Is(err, errLineTooLong) {
+				_ = writeClient("500 5.5.2 Line too long\r\n")
+			}
+			return result(err), false, "", nil
 		}
 		bytesIn.Add(int64(len(clientLine)))
 
 		trimmed := strings.TrimSpace(clientLine)
 		upper := strings.ToUpper(trimmed)
+
+		// Reset transaction on HELO / EHLO / RSET
+		if upper == "RSET" || strings.HasPrefix(upper, "HELO") || strings.HasPrefix(upper, "EHLO") {
+			rcptCount = 0
+		}
+
+		// Check RequireSTARTTLS
+		if insp.RequireSTARTTLS && !tlsActive {
+			if strings.HasPrefix(upper, "AUTH") || strings.HasPrefix(upper, "MAIL FROM:") || strings.HasPrefix(upper, "RCPT TO:") || upper == "DATA" {
+				_ = writeClient("530 5.7.0 Must issue a STARTTLS command first\r\n")
+				continue
+			}
+		}
 
 		// 1. DATA Handover
 		if upper == "DATA" {
@@ -84,7 +103,7 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 			}
 			if strings.HasPrefix(strings.TrimSpace(resp), "354") {
 				for {
-					line, err := clientReader.ReadString('\n')
+					line, err := readBoundedLine(clientReader, 65536)
 					if err != nil {
 						return result(err), false, "", err
 					}
@@ -103,6 +122,7 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 				if err := writeClient(dataResp); err != nil {
 					return result(err), false, "", err
 				}
+				rcptCount = 0
 			}
 			continue
 		}
@@ -120,6 +140,7 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 				return result(err), false, "", err
 			}
 			if strings.HasPrefix(strings.TrimSpace(resp), "220") {
+				tlsActive = true
 				clientBuffered := &protocol.BufferedConn{Reader: clientReader, Conn: client}
 				upstreamBuffered := &protocol.BufferedConn{Reader: upstreamReader, Conn: upstream}
 				res := protocol.Proxy(clientBuffered, upstreamBuffered)
@@ -132,14 +153,25 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 
 		// 3. Sender domain check
 		if strings.HasPrefix(upper, "MAIL FROM:") {
-			senderDomain := extractSenderDomain(trimmed[10:])
+			rcptCount = 0
+			fromArg := strings.TrimSpace(trimmed[len("MAIL FROM:"):])
+			senderDomain := extractSenderDomain(fromArg)
 			if insp.isDomainBlocked(senderDomain) {
 				_ = writeClient("554 5.7.1 Sender domain rejected by RouteWarden\r\n")
 				return result(nil), true, fmt.Sprintf("blocked sender domain: %s", senderDomain), nil
 			}
 		}
 
-		// 4. AUTH command tracking
+		// 4. Max recipients check
+		if strings.HasPrefix(upper, "RCPT TO:") {
+			rcptCount++
+			if insp.MaxRecipients > 0 && rcptCount > insp.MaxRecipients {
+				_ = writeClient("452 4.5.3 Too many recipients\r\n")
+				continue
+			}
+		}
+
+		// 5. AUTH command tracking
 		if strings.HasPrefix(upper, "AUTH ") {
 			inAuthExchange = true
 		}
@@ -175,6 +207,28 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 
 		if upper == "QUIT" {
 			return result(nil), false, "", nil
+		}
+	}
+}
+
+var errLineTooLong = errors.New("smtp: line too long")
+
+func readBoundedLine(r *bufio.Reader, maxLen int) (string, error) {
+	var buf []byte
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			if len(buf) > 0 && err == io.EOF {
+				return string(buf), nil
+			}
+			return string(buf), err
+		}
+		buf = append(buf, b)
+		if b == '\n' {
+			return string(buf), nil
+		}
+		if len(buf) >= maxLen {
+			return string(buf), errLineTooLong
 		}
 	}
 }
@@ -219,8 +273,9 @@ func extractSenderDomain(addr string) string {
 
 func readSMTPResponse(r *bufio.Reader) (string, error) {
 	var sb strings.Builder
+	const maxResponseLen = 65536
 	for {
-		line, err := r.ReadString('\n')
+		line, err := readBoundedLine(r, 8192)
 		if err != nil {
 			if sb.Len() > 0 && err == io.EOF {
 				sb.WriteString(line)
@@ -229,6 +284,9 @@ func readSMTPResponse(r *bufio.Reader) (string, error) {
 			return sb.String(), err
 		}
 		sb.WriteString(line)
+		if sb.Len() > maxResponseLen {
+			return sb.String(), errors.New("smtp: response too large")
+		}
 		trimmed := strings.TrimRight(line, "\r\n")
 		if len(trimmed) >= 4 && (trimmed[3] == ' ' || len(trimmed) == 3) {
 			break

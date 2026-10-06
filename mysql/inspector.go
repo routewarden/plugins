@@ -2,6 +2,8 @@ package mysql
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync/atomic"
@@ -71,7 +73,13 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 	}
 
 	// 3. Upstream responds with OK (0x00), AuthSwitch (0xFE), or ERR (0xFF)
+	authRounds := 0
 	for {
+		authRounds++
+		if authRounds > 32 {
+			return result(errors.New("excessive MySQL authentication roundtrips")), true, "excessive auth rounds", nil
+		}
+
 		upstream.SetReadDeadline(time.Now().Add(15 * time.Second))
 		serverPkt, err := readMySQLPacket(upstream)
 		if err != nil {
@@ -141,6 +149,9 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 			bytesOut.Add(proxyRes.BytesOut)
 			return result(nil), false, "", nil
 		}
+
+		// Any unexpected packet header terminates auth negotiation safely
+		return result(fmt.Errorf("unrecognized MySQL packet header: 0x%02x", header)), false, "", nil
 	}
 }
 
@@ -150,6 +161,9 @@ func readMySQLPacket(r io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	payloadLen := int(header[0]) | int(header[1])<<8 | int(header[2])<<16
+	if payloadLen > 4*1024*1024 {
+		return nil, fmt.Errorf("mysql packet payload length %d exceeds max 4MB during handshake", payloadLen)
+	}
 	packet := make([]byte, 4+payloadLen)
 	copy(packet[:4], header[:])
 	if _, err := io.ReadFull(r, packet[4:]); err != nil {

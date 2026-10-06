@@ -223,3 +223,198 @@ func TestMemcached_ValidateConfig(t *testing.T) {
 		t.Errorf("expected error for non-string elements in blocked_commands")
 	}
 }
+
+func TestMemcached_SetEmptyValueForwarding(t *testing.T) {
+	clientA, clientB := net.Pipe()
+	defer clientA.Close()
+	defer clientB.Close()
+
+	upA, upB := net.Pipe()
+	defer upA.Close()
+	defer upB.Close()
+
+	insp := &Inspector{BlockedCommands: []string{"flush_all"}}
+	insp.buildLookup()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _, _ = insp.Run(nil, clientB, upA)
+	}()
+
+	// Client sends set command with 0-byte payload: set emptykey 0 0 0\r\n\r\n
+	clientPayload := "set emptykey 0 0 0\r\n\r\n"
+	go func() {
+		_, _ = clientA.Write([]byte(clientPayload))
+	}()
+
+	// Upstream receives command line and empty data (the 2-byte \r\n)
+	upBuf := make([]byte, len(clientPayload))
+	if _, err := io.ReadFull(upB, upBuf); err != nil {
+		t.Fatalf("upstream failed reading empty payload: %v", err)
+	}
+	if string(upBuf) != clientPayload {
+		t.Errorf("upstream received %q, expected %q", string(upBuf), clientPayload)
+	}
+
+	// Upstream responds STORED\r\n
+	go func() {
+		_, _ = upB.Write([]byte("STORED\r\n"))
+	}()
+
+	var clientBuf [64]byte
+	clientN, err := clientA.Read(clientBuf[:])
+	if err != nil {
+		t.Fatalf("client failed read: %v", err)
+	}
+	if string(clientBuf[:clientN]) != "STORED\r\n" {
+		t.Errorf("client received %q, expected 'STORED\\r\\n'", string(clientBuf[:clientN]))
+	}
+
+	_ = clientA.Close()
+	_ = upB.Close()
+	<-done
+}
+
+func TestMemcached_NoReplyHandling(t *testing.T) {
+	clientA, clientB := net.Pipe()
+	defer clientA.Close()
+	defer clientB.Close()
+
+	upA, upB := net.Pipe()
+	defer upA.Close()
+	defer upB.Close()
+
+	insp := &Inspector{BlockedCommands: []string{"flush_all"}}
+	insp.buildLookup()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _, _ = insp.Run(nil, clientB, upA)
+	}()
+
+	// Client sends set with noreply, followed immediately by get command
+	setPayload := "set mykey 0 0 5 noreply\r\nhello\r\n"
+	getPayload := "get mykey\r\n"
+	go func() {
+		_, _ = clientA.Write([]byte(setPayload + getPayload))
+	}()
+
+	// Upstream receives set payload
+	upBufSet := make([]byte, len(setPayload))
+	if _, err := io.ReadFull(upB, upBufSet); err != nil {
+		t.Fatalf("upstream failed reading set payload: %v", err)
+	}
+	if string(upBufSet) != setPayload {
+		t.Errorf("upstream received %q, expected %q", string(upBufSet), setPayload)
+	}
+
+	// Upstream does NOT reply to set (noreply), but receives getPayload
+	upBufGet := make([]byte, len(getPayload))
+	if _, err := io.ReadFull(upB, upBufGet); err != nil {
+		t.Fatalf("upstream failed reading get payload: %v", err)
+	}
+	if string(upBufGet) != getPayload {
+		t.Errorf("upstream received %q, expected %q", string(upBufGet), getPayload)
+	}
+
+	// Upstream replies to get
+	go func() {
+		_, _ = upB.Write([]byte("VALUE mykey 0 5\r\nhello\r\nEND\r\n"))
+	}()
+
+	expectedResp := "VALUE mykey 0 5\r\nhello\r\nEND\r\n"
+	clientBuf := make([]byte, len(expectedResp))
+	if _, err := io.ReadFull(clientA, clientBuf); err != nil {
+		t.Fatalf("client failed reading response to get: %v", err)
+	}
+	if string(clientBuf) != expectedResp {
+		t.Errorf("client received %q, expected %q", string(clientBuf), expectedResp)
+	}
+
+	_ = clientA.Close()
+	_ = upB.Close()
+	<-done
+}
+
+func TestMemcached_SecurityBoundaries(t *testing.T) {
+	t.Run("StorageDataLength_TooLarge", func(t *testing.T) {
+		clientA, clientB := net.Pipe()
+		defer clientA.Close()
+		defer clientB.Close()
+
+		upA, upB := net.Pipe()
+		defer upA.Close()
+		defer upB.Close()
+
+		insp := &Inspector{BlockedCommands: []string{"flush_all"}}
+		insp.buildLookup()
+
+		done := make(chan struct {
+			blocked bool
+			reason  string
+		}, 1)
+
+		go func() {
+			_, blocked, reason, _ := insp.Run(nil, clientB, upA)
+			done <- struct {
+				blocked bool
+				reason  string
+			}{blocked, reason}
+		}()
+
+		// Client sends storage command with >1MB data length
+		go func() {
+			_, _ = clientA.Write([]byte("set bigkey 0 0 5000000\r\n"))
+		}()
+
+		var buf [128]byte
+		n, _ := clientA.Read(buf[:])
+		resp := string(buf[:n])
+		if !strings.HasPrefix(resp, "SERVER_ERROR") {
+			t.Errorf("expected SERVER_ERROR for oversized storage data length, got: %s", resp)
+		}
+
+		res := <-done
+		if !res.blocked {
+			t.Errorf("expected session to be marked blocked")
+		}
+	})
+
+	t.Run("LineTooLong_ReturnsClientError", func(t *testing.T) {
+		clientA, clientB := net.Pipe()
+		defer clientA.Close()
+		defer clientB.Close()
+
+		upA, upB := net.Pipe()
+		defer upA.Close()
+		defer upB.Close()
+
+		insp := &Inspector{}
+		insp.buildLookup()
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _, _, _ = insp.Run(nil, clientB, upA)
+		}()
+
+		oversized := strings.Repeat("M", 4100)
+		go func() {
+			_, _ = clientA.Write([]byte(oversized))
+		}()
+
+		var buf [128]byte
+		n, _ := clientA.Read(buf[:])
+		if !strings.HasPrefix(string(buf[:n]), "CLIENT_ERROR") {
+			t.Errorf("expected CLIENT_ERROR Line too long, got: %s", string(buf[:n]))
+		}
+
+		_ = clientA.Close()
+		_ = upA.Close()
+		<-done
+	})
+}
+
+

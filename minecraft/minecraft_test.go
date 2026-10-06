@@ -93,3 +93,66 @@ func TestMinecraft_Run_BlockedProtocolVersion(t *testing.T) {
 		t.Fatalf("expected blocked protocol version 47")
 	}
 }
+
+func TestMinecraft_Run_BlockedProtocolVersion_Fragmented(t *testing.T) {
+	insp := &Inspector{BlockedProtocolVersions: []int{760}} // Block 1.19.2 (760 = 0xF8, 0x05)
+
+	clientConn, proxyClient := net.Pipe()
+	proxyUpstream, upstreamConn := net.Pipe()
+	defer clientConn.Close()
+	defer proxyClient.Close()
+	defer proxyUpstream.Close()
+	defer upstreamConn.Close()
+
+	done := make(chan bool, 1)
+	go func() {
+		_, blocked, reason, _ := insp.Run(nil, proxyClient, proxyUpstream)
+		if blocked && reason != "" {
+			done <- true
+		} else {
+			done <- false
+		}
+	}()
+
+	// Send fragmented: first 3 bytes (0x0F, 0x00, 0xF8), then remaining bytes
+	pkt := []byte{0x0F, 0x00, 0xF8, 0x05, 0x09, 'l', 'o', 'c', 'a', 'l', 'h', 'o', 's', 't', 0x63, 0xDD, 0x02}
+	go func() {
+		_, _ = clientConn.Write(pkt[:3])
+		_, _ = clientConn.Write(pkt[3:])
+	}()
+
+	if !<-done {
+		t.Fatalf("expected blocked protocol version 760 across fragmented TCP segments")
+	}
+}
+
+func TestMinecraft_Run_MalformedHandshake_Rejected(t *testing.T) {
+	insp := &Inspector{BlockedProtocolVersions: []int{760}}
+
+	clientConn, proxyClient := net.Pipe()
+	proxyUpstream, upstreamConn := net.Pipe()
+	defer clientConn.Close()
+	defer proxyClient.Close()
+	defer proxyUpstream.Close()
+	defer upstreamConn.Close()
+
+	done := make(chan bool, 1)
+	go func() {
+		_, blocked, reason, _ := insp.Run(nil, proxyClient, proxyUpstream)
+		if blocked && reason != "" {
+			done <- true
+		} else {
+			done <- false
+		}
+	}()
+
+	// Packet claims length 5, but sends unexpected packet ID 0x01 instead of handshake 0x00
+	pkt := []byte{0x05, 0x01, 0x00, 0x00, 0x00}
+	go func() {
+		_, _ = clientConn.Write(pkt)
+	}()
+
+	if !<-done {
+		t.Fatalf("expected rejected malformed handshake packet ID")
+	}
+}

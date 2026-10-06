@@ -229,3 +229,122 @@ func TestPostgres_Run_AuthError28000(t *testing.T) {
 		t.Errorf("expected AuthFailureFunc on Postgres error code 28000")
 	}
 }
+
+func TestPostgres_Run_GSSENCRequest(t *testing.T) {
+	clientConn, clientPeer := net.Pipe()
+	defer clientConn.Close()
+	defer clientPeer.Close()
+
+	upConn, upPeer := net.Pipe()
+	defer upConn.Close()
+	defer upPeer.Close()
+
+	insp := &Inspector{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, blocked, _, _ := insp.Run(nil, clientConn, upConn)
+		if blocked {
+			t.Errorf("expected allowed GSSENCRequest")
+		}
+	}()
+
+	// 1. Client sends GSSENCRequest (len=8, code=80877104)
+	var gssReq [8]byte
+	binary.BigEndian.PutUint32(gssReq[0:4], 8)
+	binary.BigEndian.PutUint32(gssReq[4:8], 80877104)
+	go func() {
+		_, _ = clientPeer.Write(gssReq[:])
+	}()
+
+	// Upstream reads GSSENCRequest
+	var upReq [8]byte
+	if _, err := io.ReadFull(upPeer, upReq[:]); err != nil {
+		t.Fatalf("upstream failed reading GSSENCRequest: %v", err)
+	}
+
+	// Upstream replies 'N' (declined)
+	go func() {
+		_, _ = upPeer.Write([]byte{'N'})
+	}()
+
+	// Client reads 'N'
+	var clientResp [1]byte
+	if _, err := io.ReadFull(clientPeer, clientResp[:]); err != nil {
+		t.Fatalf("client failed reading GSS response: %v", err)
+	}
+	if clientResp[0] != 'N' {
+		t.Errorf("expected 'N', got %c", clientResp[0])
+	}
+
+	// 2. Client then proceeds with standard StartupMessage
+	var startup [8]byte
+	binary.BigEndian.PutUint32(startup[0:4], 8)
+	binary.BigEndian.PutUint32(startup[4:8], 196608)
+	go func() {
+		_, _ = clientPeer.Write(startup[:])
+	}()
+
+	var upStartup [8]byte
+	if _, err := io.ReadFull(upPeer, upStartup[:]); err != nil {
+		t.Fatalf("upstream failed reading startup: %v", err)
+	}
+
+	// Upstream sends AuthenticationOk
+	var authOk [9]byte
+	authOk[0] = 'R'
+	binary.BigEndian.PutUint32(authOk[1:5], 8)
+	binary.BigEndian.PutUint32(authOk[5:9], 0)
+	go func() {
+		_, _ = upPeer.Write(authOk[:])
+	}()
+
+	var clientAuthOk [9]byte
+	if _, err := io.ReadFull(clientPeer, clientAuthOk[:]); err != nil {
+		t.Fatalf("client failed reading auth ok: %v", err)
+	}
+
+	_ = clientPeer.Close()
+	_ = upPeer.Close()
+	<-done
+}
+
+func TestPostgres_Run_CancelRequest(t *testing.T) {
+	clientConn, clientPeer := net.Pipe()
+	defer clientConn.Close()
+	defer clientPeer.Close()
+
+	upConn, upPeer := net.Pipe()
+	defer upConn.Close()
+	defer upPeer.Close()
+
+	insp := &Inspector{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, blocked, _, err := insp.Run(nil, clientConn, upConn)
+		if blocked || err != nil {
+			t.Errorf("expected allowed CancelRequest without error, got blocked=%v err=%v", blocked, err)
+		}
+	}()
+
+	// Client sends CancelRequest (len=16, code=80877102, PID=1234, Secret=5678)
+	var cancelReq [16]byte
+	binary.BigEndian.PutUint32(cancelReq[0:4], 16)
+	binary.BigEndian.PutUint32(cancelReq[4:8], 80877102)
+	binary.BigEndian.PutUint32(cancelReq[8:12], 1234)
+	binary.BigEndian.PutUint32(cancelReq[12:16], 5678)
+	go func() {
+		_, _ = clientPeer.Write(cancelReq[:])
+	}()
+
+	// Upstream reads CancelRequest
+	var upReq [16]byte
+	if _, err := io.ReadFull(upPeer, upReq[:]); err != nil {
+		t.Fatalf("upstream failed reading CancelRequest: %v", err)
+	}
+
+	_ = clientPeer.Close()
+	_ = upPeer.Close()
+	<-done
+}

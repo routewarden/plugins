@@ -2,6 +2,9 @@ package pop3
 
 import (
 	"bufio"
+	"errors"
+	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -14,6 +17,28 @@ import (
 // Inspector inspects POP3 mail sessions.
 type Inspector struct {
 	MaxAuthFailures int
+}
+
+var errLineTooLong = errors.New("pop3: line too long")
+
+func readBoundedLine(r *bufio.Reader, maxLen int) (string, error) {
+	var buf []byte
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			if len(buf) > 0 && err == io.EOF {
+				return string(buf), nil
+			}
+			return string(buf), err
+		}
+		buf = append(buf, b)
+		if b == '\n' {
+			return string(buf), nil
+		}
+		if len(buf) >= maxLen {
+			return string(buf), errLineTooLong
+		}
+	}
 }
 
 // Run executes the POP3 inspection and relay loop.
@@ -32,7 +57,7 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 	clientReader := bufio.NewReader(client)
 	upstreamReader := bufio.NewReader(upstream)
 
-	greeting, err := upstreamReader.ReadString('\n')
+	greeting, err := readBoundedLine(upstreamReader, 8192)
 	if err != nil {
 		return result(err), true, "failed reading POP3 greeting: " + err.Error(), err
 	}
@@ -41,10 +66,15 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		return result(err), false, "", err
 	}
 
+	authFailures := 0
+
 	for {
 		client.SetReadDeadline(time.Now().Add(5 * time.Minute))
-		clientLine, err := clientReader.ReadString('\n')
+		clientLine, err := readBoundedLine(clientReader, 4096)
 		if err != nil {
+			if errors.Is(err, errLineTooLong) {
+				_, _ = client.Write([]byte("-ERR Line too long\r\n"))
+			}
 			return result(nil), false, "", nil
 		}
 		bytesIn.Add(int64(len(clientLine)))
@@ -57,7 +87,7 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 			if _, err := upstream.Write([]byte(clientLine)); err != nil {
 				return result(err), false, "", err
 			}
-			resp, err := upstreamReader.ReadString('\n')
+			resp, err := readBoundedLine(upstreamReader, 8192)
 			if err != nil {
 				return result(err), false, "", err
 			}
@@ -87,7 +117,7 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 			isMultiLine = false
 		}
 
-		resp, err := upstreamReader.ReadString('\n')
+		resp, err := readBoundedLine(upstreamReader, 8192)
 		if err != nil {
 			return result(nil), false, "", nil
 		}
@@ -101,16 +131,28 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		// Check auth failure
 		if strings.HasPrefix(upper, "PASS ") || strings.HasPrefix(upper, "AUTH ") {
 			if strings.HasPrefix(trimmedResp, "-ERR") {
+				authFailures++
 				if ctx != nil {
 					ctx.OnAuthFailure()
 				}
+				if insp.MaxAuthFailures > 0 && authFailures >= insp.MaxAuthFailures {
+					errMsg := "-ERR Too many authentication failures\r\n"
+					_, _ = client.Write([]byte(errMsg))
+					bytesOut.Add(int64(len(errMsg)))
+					if ctx != nil {
+						ctx.OnSecurityEvent("blocked", "pop3_max_auth_failures_exceeded")
+					}
+					return result(nil), true, fmt.Sprintf("max auth failures exceeded (%d)", authFailures), nil
+				}
+			} else if strings.HasPrefix(trimmedResp, "+OK") {
+				authFailures = 0
 			}
 		}
 
 		// Multi-line data relay (terminated by dot-CRLF)
 		if isMultiLine && strings.HasPrefix(trimmedResp, "+OK") {
 			for {
-				line, err := upstreamReader.ReadString('\n')
+				line, err := readBoundedLine(upstreamReader, 65536)
 				if err != nil {
 					return result(nil), false, "", nil
 				}

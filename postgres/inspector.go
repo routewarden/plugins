@@ -53,26 +53,26 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 
 		version := binary.BigEndian.Uint32(payload[:4])
 
-		// Check for SSLRequest (80877103 = 0x04D2162F)
-		if version == 80877103 {
-			// Forward SSLRequest to upstream
+		// Check for SSLRequest (80877103 = 0x04D2162F) or GSSENCRequest (80877104 = 0x04D21630)
+		if version == 80877103 || version == 80877104 {
+			// Forward SSL/GSS request to upstream
 			if _, err := upstream.Write(append(lenBuf[:], payload...)); err != nil {
-				return result(err), true, "failed writing SSLRequest to upstream: " + err.Error(), err
+				return result(err), true, "failed writing SSL/GSS request to upstream: " + err.Error(), err
 			}
 
-			// Upstream replies with single byte: 'S' (SSL ok) or 'N' (no SSL)
+			// Upstream replies with single byte: 'S' (SSL ok), 'G' (GSS ok), or 'N' (declined)
 			var resp [1]byte
 			upstream.SetReadDeadline(time.Now().Add(10 * time.Second))
 			if _, err := io.ReadFull(upstream, resp[:]); err != nil {
-				return result(err), true, "failed reading SSL response from upstream: " + err.Error(), err
+				return result(err), true, "failed reading SSL/GSS response from upstream: " + err.Error(), err
 			}
 			bytesOut.Add(1)
 			if _, err := client.Write(resp[:]); err != nil {
 				return result(err), false, "", err
 			}
 
-			if resp[0] == 'S' {
-				// TLS negotiation begins immediately between client and server.
+			if resp[0] == 'S' || resp[0] == 'G' {
+				// TLS or GSS negotiation begins immediately between client and server.
 				client.SetDeadline(time.Time{})
 				upstream.SetDeadline(time.Time{})
 				proxyRes := protocol.Proxy(client, upstream)
@@ -80,8 +80,17 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 				bytesOut.Add(proxyRes.BytesOut)
 				return result(nil), false, "", nil
 			}
-			// If 'N', loop back to read the subsequent standard StartupMessage in cleartext
+			// If 'N', loop back to read subsequent request (SSLRequest or StartupMessage)
 			continue
+		}
+
+		// Check for CancelRequest (80877102 = 0x04D2162E)
+		if version == 80877102 {
+			if _, err := upstream.Write(append(lenBuf[:], payload...)); err != nil {
+				return result(err), true, "failed writing CancelRequest to upstream: " + err.Error(), err
+			}
+			// Backend closes connection after processing cancellation without sending a response
+			return result(nil), false, "", nil
 		}
 
 		// Forward standard StartupMessage to upstream

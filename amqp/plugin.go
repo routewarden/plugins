@@ -413,7 +413,7 @@ func extractVHost(payload []byte) string {
 		return "/"
 	}
 	vhostLen := int(payload[4])
-	if 5+vhostLen > len(payload) {
+	if vhostLen == 0 || 5+vhostLen > len(payload) {
 		return "/"
 	}
 	return string(payload[5 : 5+vhostLen])

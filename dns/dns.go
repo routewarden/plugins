@@ -36,6 +36,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/net/dns/dnsmessage"
 	"github.com/routewarden/tcp-warden/plugins"
 	"github.com/routewarden/tcp-warden/plugins/sdk"
 	"github.com/routewarden/tcp-warden/protocol"
@@ -170,56 +171,23 @@ func extractDNSQueryName(msg []byte) string {
 	return ""
 }
 
-// extractDNSQueryNames parses all QNAMEs for all questions (QDCOUNT) in a DNS message.
+// extractDNSQueryNames parses all QNAMEs for all questions in a DNS message using dnsmessage.Parser.
 func extractDNSQueryNames(msg []byte) []string {
-	// DNS header is 12 bytes; QDCOUNT is at offset 4 (2 bytes).
-	if len(msg) < 12 {
+	var p dnsmessage.Parser
+	if _, err := p.Start(msg); err != nil {
 		return nil
 	}
-	qdcount := int(binary.BigEndian.Uint16(msg[4:6]))
-	if qdcount == 0 {
-		return nil
-	}
-	pos := 12
 	var names []string
-
-	for q := 0; q < qdcount && pos < len(msg); q++ {
-		var labels []string
-		totalLen := 0
-		terminated := false
-
-		for pos < len(msg) {
-			length := int(msg[pos])
-			if length == 0 {
-				terminated = true
-				pos++
-				break
-			}
-			// Pointer (compression) or reserved bits set, or label > 63 (RFC 1035) -> malformed in query
-			if length&0xC0 != 0 || length > 63 {
-				return names
-			}
-			pos++
-			if pos+length > len(msg) {
-				return names
-			}
-			labels = append(labels, string(msg[pos:pos+length]))
-			totalLen += length + 1
-			if totalLen > 255 || len(labels) > 128 {
-				return names
-			}
-			pos += length
-		}
-
-		if !terminated || len(labels) == 0 {
+	for {
+		q, err := p.Question()
+		if err != nil {
 			break
 		}
-		names = append(names, strings.Join(labels, "."))
-
-		// Skip QTYPE (2 bytes) and QCLASS (2 bytes)
-		pos += 4
+		name := strings.TrimSuffix(q.Name.String(), ".")
+		if name != "" {
+			names = append(names, name)
+		}
 	}
-
 	return names
 }
 

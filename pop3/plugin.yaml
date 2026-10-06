@@ -1,5 +1,5 @@
 name: pop3
-version: "2.0.0"
+version: "2.0.1"
 manifest_version: "1.0.0"
 description: "POP3 mail retrieval protocol inspector with auth brute-force tracking (-ERR)"
 author: "RouteWarden Team"

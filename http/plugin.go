@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"path"
 	"regexp"
 	"strings"
 	"sync"
@@ -359,18 +360,28 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 			return result(err), false, "", nil
 		}
 
-		// 1. Check Host header
+		// 1. Check Host header and absolute Request-URI host
 		if len(insp.AllowedHosts) > 0 {
-			reqHost := req.Host
-			if idx := strings.Index(reqHost, ":"); idx != -1 {
-				reqHost = reqHost[:idx]
+			hostsToCheck := []string{req.Host}
+			if req.URL.Host != "" && req.URL.Host != req.Host {
+				hostsToCheck = append(hostsToCheck, req.URL.Host)
 			}
-			if !isHostAllowed(reqHost, insp.AllowedHosts) {
-				sendHTTPForbidden(client, "Host forbidden by RouteWarden\n")
-				if ctx != nil {
-					ctx.OnSecurityEvent("blocked", "http_host_blocked_"+reqHost)
+			for _, h := range hostsToCheck {
+				reqHost := h
+				if host, _, err := net.SplitHostPort(reqHost); err == nil {
+					reqHost = host
+				} else if idx := strings.Index(reqHost, ":"); idx != -1 && !strings.Contains(reqHost, "]") {
+					reqHost = reqHost[:idx]
 				}
-				return result(nil), true, "blocked http host: " + reqHost, nil
+				reqHost = strings.Trim(reqHost, "[]")
+				reqHost = strings.TrimSuffix(reqHost, ".")
+				if !isHostAllowed(reqHost, insp.AllowedHosts) {
+					sendHTTPForbidden(client, "Host forbidden by RouteWarden\n")
+					if ctx != nil {
+						ctx.OnSecurityEvent("blocked", "http_host_blocked_"+reqHost)
+					}
+					return result(nil), true, "blocked http host: " + reqHost, nil
+				}
 			}
 		}
 
@@ -404,13 +415,28 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		// 4. Check Blocked Paths (Regex)
 		if len(insp.BlockedPaths) > 0 {
 			reqPath := req.URL.Path
+			cleanedPath := path.Clean(reqPath)
+			pathsToMatch := []string{reqPath, cleanedPath}
+			if req.URL.RawPath != "" && req.URL.RawPath != reqPath {
+				pathsToMatch = append(pathsToMatch, req.URL.RawPath)
+			}
+			if req.RequestURI != "" && req.RequestURI != reqPath {
+				pathsToMatch = append(pathsToMatch, req.RequestURI)
+			}
 			for _, rx := range insp.BlockedPaths {
-				if rx.MatchString(reqPath) {
+				matched := false
+				for _, p := range pathsToMatch {
+					if rx.MatchString(p) {
+						matched = true
+						break
+					}
+				}
+				if matched {
 					sendHTTPForbidden(client, "Path forbidden by RouteWarden\n")
 					if ctx != nil {
-						ctx.OnSecurityEvent("blocked", "http_path_blocked_"+reqPath)
+						ctx.OnSecurityEvent("blocked", "http_path_blocked_"+cleanedPath)
 					}
-					return result(nil), true, "blocked http path regex: " + reqPath, nil
+					return result(nil), true, "blocked http path regex: " + cleanedPath, nil
 				}
 			}
 		}
@@ -471,36 +497,53 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 }
 
 func sendHTTPForbidden(conn net.Conn, body string) {
-	resp := fmt.Sprintf("HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
-	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	_, _ = conn.Write([]byte(resp))
+	resp := &http.Response{
+		StatusCode:    http.StatusForbidden,
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        make(http.Header),
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+		Close:         true,
+	}
+	resp.Header.Set("Content-Type", "text/plain; charset=utf-8")
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = resp.Write(conn)
 }
 
 func isHostAllowed(host string, allowedHosts []string) bool {
-	host = strings.ToLower(host)
+	host = strings.ToLower(strings.TrimSpace(host))
 	for _, allowed := range allowedHosts {
 		allowed = strings.ToLower(strings.TrimSpace(allowed))
+		if allowed == "*" || host == allowed {
+			return true
+		}
 		if strings.HasPrefix(allowed, "*.") {
 			suffix := allowed[1:] // e.g. ".example.com"
 			if strings.HasSuffix(host, suffix) {
 				return true
 			}
-		} else if host == allowed {
-			return true
+			if host == allowed[2:] { // apex domain match
+				return true
+			}
 		}
 	}
 	return false
 }
 
-func isPathAllowed(path string, allowedPaths []string) bool {
+func isPathAllowed(reqPath string, allowedPaths []string) bool {
+	cleaned := path.Clean(reqPath)
 	for _, allowed := range allowedPaths {
 		allowed = strings.TrimSpace(allowed)
-		if strings.HasSuffix(allowed, "*") {
-			prefix := strings.TrimSuffix(allowed, "*")
-			if strings.HasPrefix(path, prefix) {
+		if allowed == "*" {
+			return true
+		}
+		if before, ok := strings.CutSuffix(allowed, "*"); ok {
+			prefix := before
+			if strings.HasPrefix(cleaned, prefix) || cleaned == strings.TrimSuffix(prefix, "/") {
 				return true
 			}
-		} else if path == allowed {
+		} else if reqPath == allowed || cleaned == allowed {
 			return true
 		}
 	}

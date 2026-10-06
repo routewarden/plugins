@@ -74,21 +74,39 @@ func inspectSSHBanner(conn net.Conn) (*bufio.Reader, sshResult) {
 	defer conn.SetReadDeadline(time.Time{})
 
 	br := bufio.NewReader(conn)
-	rawLine, err := br.ReadString('\n')
-	if err != nil {
-		return br, sshResult{}
-	}
-	line := strings.TrimSpace(rawLine)
+	var fullBuf strings.Builder
+	var currentLine strings.Builder
+	const maxLineLen = 1024
+	const maxTotalBanner = 4096
 
-	result := sshResult{
-		ClientVersion: line,
-		RawBanner:     rawLine,
-		Valid:         strings.HasPrefix(line, "SSH-"),
+	for {
+		b, err := br.ReadByte()
+		if err != nil {
+			return br, sshResult{}
+		}
+		fullBuf.WriteByte(b)
+		currentLine.WriteByte(b)
+
+		if fullBuf.Len() > maxTotalBanner || currentLine.Len() > maxLineLen {
+			return br, sshResult{Valid: false}
+		}
+
+		if b == '\n' {
+			line := strings.TrimSpace(currentLine.String())
+			if strings.HasPrefix(line, "SSH-") {
+				res := sshResult{
+					ClientVersion: line,
+					RawBanner:     fullBuf.String(),
+					Valid:         true,
+				}
+				if strings.HasPrefix(line, "SSH-1.") {
+					res.IsSSH1 = true
+				}
+				return br, res
+			}
+			currentLine.Reset()
+		}
 	}
-	if strings.HasPrefix(line, "SSH-1.") {
-		result.IsSSH1 = true
-	}
-	return br, result
 }
 
 type sshAuthMonitor struct {
@@ -122,6 +140,13 @@ func (c *sshMonitorConn) Read(p []byte) (int, error) {
 func (c *sshMonitorConn) CloseWrite() error {
 	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
 		return cw.CloseWrite()
+	}
+	return nil
+}
+
+func (c *sshMonitorConn) CloseRead() error {
+	if cr, ok := c.Conn.(interface{ CloseRead() error }); ok {
+		return cr.CloseRead()
 	}
 	return nil
 }

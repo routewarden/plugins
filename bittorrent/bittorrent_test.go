@@ -322,6 +322,30 @@ func TestBTUDPInspector_DHTMethodBlocked(t *testing.T) {
 	}
 }
 
+func TestBTUDPInspector_DHTAllowlist_RejectsMissingMethod(t *testing.T) {
+	p := &BitTorrentPlugin{}
+	insp, err := p.CreateUDPInspector(map[string]any{
+		"allowed_dht_methods": []any{"ping", "find_node"},
+	})
+	if err != nil {
+		t.Fatalf("CreateUDPInspector: %v", err)
+	}
+	defer insp.Close()
+
+	// Query with missing/unparseable method should be rejected when allowlist is active
+	pkt := &sdk.UDPPacket{
+		Payload:    []byte("d1:y1:q1:q99999:badlengthe"),
+		ClientAddr: &net.UDPAddr{IP: net.ParseIP("1.2.3.4"), Port: 6881},
+	}
+	verdict, reason, _ := insp.InspectPacket(btUDPCtx(), pkt)
+	if verdict != sdk.UDPVerdictDrop {
+		t.Errorf("expected Drop for unparseable query under allowlist, got %v", verdict)
+	}
+	if reason != "bt_dht_query_missing_method" {
+		t.Errorf("unexpected reason: %q", reason)
+	}
+}
+
 // ── TCP Inspector full pipeline tests ────────────────────────────────────────
 
 func TestBTTCPInspector_BlockAll(t *testing.T) {

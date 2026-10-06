@@ -1,5 +1,5 @@
 name: smtp
-version: "2.0.0"
+version: "2.0.1"
 manifest_version: "1.0.0"
 description: "SMTP mail transfer protocol inspector with recipient limits, spam domain blocking, and auth tracking"
 author: "RouteWarden Team"

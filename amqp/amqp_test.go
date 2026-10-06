@@ -266,3 +266,40 @@ func TestAMQP_AllowedVHostAndProxy(t *testing.T) {
 	}
 }
 
+func TestAMQP_ExtractVHost(t *testing.T) {
+	tests := []struct {
+		name     string
+		payload  []byte
+		expected string
+	}{
+		{
+			name:     "truncated payload",
+			payload:  []byte{0x00, 0x0A, 0x00, 0x28},
+			expected: "/",
+		},
+		{
+			name:     "empty vhost length returns root slash",
+			payload:  []byte{0x00, 0x0A, 0x00, 0x28, 0x00},
+			expected: "/",
+		},
+		{
+			name:     "vhost length exceeds payload bounds",
+			payload:  []byte{0x00, 0x0A, 0x00, 0x28, 0x10, 'a', 'b'},
+			expected: "/",
+		},
+		{
+			name:     "valid custom vhost",
+			payload:  []byte{0x00, 0x0A, 0x00, 0x28, 0x04, '/', 'd', 'e', 'v'},
+			expected: "/dev",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractVHost(tc.payload)
+			if got != tc.expected {
+				t.Errorf("extractVHost() = %q; want %q", got, tc.expected)
+			}
+		})
+	}
+}

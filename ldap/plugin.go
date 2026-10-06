@@ -243,12 +243,13 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		_, respOpTag, respOpBody, rErr := parseLDAPMessage(respData)
 		if rErr == nil && respOpTag == tagBindResponse {
 			resCode := extractResultCode(respOpBody)
-			if resCode == resultInvalidCredentials {
+			switch resCode {
+			case resultInvalidCredentials:
 				if ctx != nil {
 					ctx.OnAuthFailure()
 					ctx.OnSecurityEvent("auth_failure", "ldap_invalid_credentials")
 				}
-			} else if resCode == resultSuccess {
+			case resultSuccess:
 				// Once authenticated, switch to raw proxy for high throughput
 				client.SetWriteDeadline(time.Now().Add(30 * time.Second))
 				if _, err := client.Write(respData); err != nil {
@@ -272,17 +273,17 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 }
 
 func (insp *Inspector) isDNBlocked(dn string) bool {
-	dnLower := strings.ToLower(strings.TrimSpace(dn))
+	dnNorm := normalizeDN(dn)
 	for _, b := range insp.BlockedDNs {
-		if strings.ToLower(strings.TrimSpace(b)) == dnLower {
+		if normalizeDN(b) == dnNorm {
 			return true
 		}
 	}
 	if len(insp.AllowedBaseDNs) > 0 {
 		allowed := false
 		for _, base := range insp.AllowedBaseDNs {
-			baseLower := strings.ToLower(strings.TrimSpace(base))
-			if strings.HasSuffix(dnLower, baseLower) {
+			baseNorm := normalizeDN(base)
+			if dnNorm == baseNorm || strings.HasSuffix(dnNorm, ","+baseNorm) {
 				allowed = true
 				break
 			}
@@ -292,6 +293,14 @@ func (insp *Inspector) isDNBlocked(dn string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeDN(dn string) string {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(dn)), ",")
+	for i, p := range parts {
+		parts[i] = strings.TrimSpace(p)
+	}
+	return strings.Join(parts, ",")
 }
 
 // readBERMessage reads a complete ASN.1 BER TLV message from conn.
@@ -329,8 +338,8 @@ func readBERMessage(r io.Reader) ([]byte, error) {
 		}
 	}
 
-	if length > 16*1024*1024 { // 16 MB max
-		return nil, fmt.Errorf("BER message length too large: %d", length)
+	if length < 0 || length > 16*1024*1024 { // 16 MB max
+		return nil, fmt.Errorf("BER message length invalid: %d", length)
 	}
 
 	val := make([]byte, length)
@@ -399,11 +408,14 @@ func decodeBERLength(b []byte) (length int, bytesRead int) {
 		return int(b[0]), 1
 	}
 	numBytes := int(b[0] & 0x7F)
-	if numBytes > 4 || len(b) < 1+numBytes {
+	if numBytes == 0 || numBytes > 4 || len(b) < 1+numBytes {
 		return 0, 0
 	}
 	for i := 1; i <= numBytes; i++ {
 		length = (length << 8) | int(b[i])
+	}
+	if length < 0 {
+		return 0, 0
 	}
 	return length, 1 + numBytes
 }

@@ -158,3 +158,116 @@ func TestPOP3_ValidateConfig(t *testing.T) {
 		t.Errorf("expected error for non-int max_auth_failures")
 	}
 }
+
+func TestPOP3_SecurityBoundaries(t *testing.T) {
+	t.Run("MaxAuthFailures_BlocksConnection", func(t *testing.T) {
+		clientA, clientB := net.Pipe()
+		defer clientA.Close()
+		defer clientB.Close()
+
+		upA, upB := net.Pipe()
+		defer upA.Close()
+		defer upB.Close()
+
+		insp := &Inspector{MaxAuthFailures: 2}
+		done := make(chan struct {
+			blocked bool
+			reason  string
+		}, 1)
+
+		go func() {
+			_, blocked, reason, _ := insp.Run(nil, clientB, upA)
+			done <- struct {
+				blocked bool
+				reason  string
+			}{blocked, reason}
+		}()
+
+		// Upstream mock
+		go func() {
+			_, _ = upB.Write([]byte("+OK POP3 server ready\r\n"))
+			buf := make([]byte, 256)
+			for {
+				n, err := upB.Read(buf)
+				if err != nil {
+					return
+				}
+				cmd := string(buf[:n])
+				if strings.HasPrefix(cmd, "USER") {
+					_, _ = upB.Write([]byte("+OK user accepted\r\n"))
+				} else if strings.HasPrefix(cmd, "PASS") {
+					_, _ = upB.Write([]byte("-ERR invalid password\r\n"))
+				}
+			}
+		}()
+
+		buf := make([]byte, 256)
+		_, _ = clientA.Read(buf) // Greeting
+
+		// Fail 1
+		_, _ = clientA.Write([]byte("USER u1\r\n"))
+		_, _ = clientA.Read(buf) // +OK
+		_, _ = clientA.Write([]byte("PASS p1\r\n"))
+		_, _ = clientA.Read(buf) // -ERR
+
+		// Fail 2
+		_, _ = clientA.Write([]byte("USER u1\r\n"))
+		_, _ = clientA.Read(buf) // +OK
+		_, _ = clientA.Write([]byte("PASS p2\r\n"))
+		n, _ := clientA.Read(buf) // -ERR invalid password
+		if !strings.Contains(string(buf[:n]), "-ERR") {
+			t.Errorf("expected -ERR response, got %s", string(buf[:n]))
+		}
+
+		// Subsequent read should receive -ERR Too many authentication failures
+		n, _ = clientA.Read(buf)
+		resp := string(buf[:n])
+		if !strings.Contains(resp, "-ERR Too many authentication failures") {
+			t.Errorf("expected too many failures message, got %s", resp)
+		}
+
+		res := <-done
+		if !res.blocked {
+			t.Errorf("expected session to be marked blocked")
+		}
+	})
+
+	t.Run("LineTooLong_ReturnsERR", func(t *testing.T) {
+		clientA, clientB := net.Pipe()
+		defer clientA.Close()
+		defer clientB.Close()
+
+		upA, upB := net.Pipe()
+		defer upA.Close()
+		defer upB.Close()
+
+		insp := &Inspector{}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _, _, _ = insp.Run(nil, clientB, upA)
+		}()
+
+		go func() {
+			_, _ = upB.Write([]byte("+OK POP3 server ready\r\n"))
+		}()
+
+		buf := make([]byte, 128)
+		_, _ = clientA.Read(buf) // Greeting
+
+		oversized := strings.Repeat("D", 4100)
+		go func() {
+			_, _ = clientA.Write([]byte(oversized))
+		}()
+
+		n, _ := clientA.Read(buf)
+		if !strings.HasPrefix(string(buf[:n]), "-ERR") {
+			t.Errorf("expected -ERR Line too long, got: %s", string(buf[:n]))
+		}
+
+		_ = clientA.Close()
+		_ = upA.Close()
+		<-done
+	})
+}
+

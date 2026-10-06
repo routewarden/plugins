@@ -51,7 +51,7 @@ jobs:
           ./scripts/update-plugin-version.sh --check
 
   test-plugins:
-    name: Test Plugins (Go 1.25.1)
+    name: Test Plugins (Go 1.27.1)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout plugins
@@ -74,10 +74,10 @@ jobs:
             git clone --depth=1 https://github.com/routewarden/tcp-warden.git ../tcp-warden
           fi
 
-      - name: Set up Go 1.25.1
+      - name: Set up Go 1.27.1
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25.1"
+          go-version: "1.27.1"
           cache-dependency-path: plugins/go.sum
 
       - name: Run Plugin Tests with Race Detector
@@ -102,6 +102,6 @@ jobs:
           echo "| Check | Status | Details |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| **Plugin Metadata** | ✅ Passed | Validated \`plugin.yaml\` and \`README.md\` for all plugins |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Go Tests & Race Detector** | ✅ Passed | Tested all 14 plugins with \`-race\` on Go 1.25.1 |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Go Tests & Race Detector** | ✅ Passed | Tested all 14 plugins with \`-race\` on Go 1.27.1 |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "🎉 **Ready for merge! All checks passed.**" >> $GITHUB_STEP_SUMMARY
