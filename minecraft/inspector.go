@@ -40,6 +40,16 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 	if err != nil && err != io.EOF {
 		return result(err), false, "", err
 	}
+
+	// Read until we have at least 3 bytes to attempt VarInt parsing
+	for n < 3 && err == nil {
+		var nMore int
+		nMore, err = client.Read(buf[n:])
+		n += nMore
+		if err != nil {
+			break
+		}
+	}
 	bytesIn.Add(int64(n))
 
 	if n < 3 {
@@ -49,22 +59,67 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 		return result(nil), true, "minecraft handshake packet too short", nil
 	}
 
-	// Inspect protocol version if blocked list is configured
+	// Quick check: if we already have the protocol version, check blocked list immediately
 	if len(insp.BlockedProtocolVersions) > 0 {
-		_, nLen, err := readVarInt(buf[:n])
-		if err == nil && nLen < n {
-			packetID, nID, err := readVarInt(buf[nLen:n])
-			if err == nil && packetID == 0 && nLen+nID < n {
-				protoVer, _, err := readVarInt(buf[nLen+nID : n])
-				if err == nil {
-					if slices.Contains(insp.BlockedProtocolVersions, protoVer) {
-							if ctx != nil {
-								ctx.OnSecurityEvent("blocked", fmt.Sprintf("minecraft_protocol_version_%d_blocked", protoVer))
-							}
-							return result(nil), true, fmt.Sprintf("blocked minecraft protocol version: %d", protoVer), nil
+		_, nLen, errLen := readVarInt(buf[:n])
+		if errLen == nil && nLen < n {
+			packetID, nID, errID := readVarInt(buf[nLen:n])
+			if errID == nil {
+				if packetID != 0 {
+					return result(nil), true, "invalid minecraft handshake packet id", nil
+				}
+				if nLen+nID < n {
+					protoVer, _, errVer := readVarInt(buf[nLen+nID : n])
+					if errVer == nil && slices.Contains(insp.BlockedProtocolVersions, protoVer) {
+						if ctx != nil {
+							ctx.OnSecurityEvent("blocked", fmt.Sprintf("minecraft_protocol_version_%d_blocked", protoVer))
 						}
+						return result(nil), true, fmt.Sprintf("blocked minecraft protocol version: %d", protoVer), nil
+					}
 				}
 			}
+		}
+	}
+
+	// If fragmented across TCP segments, read the rest of the handshake packet
+	pktLen, nLen, errLen := readVarInt(buf[:n])
+	if errLen == nil && pktLen > 0 && pktLen <= 65535 {
+		totalExpected := nLen + pktLen
+		if totalExpected > len(buf) {
+			totalExpected = len(buf)
+		}
+		for n < totalExpected && err == nil {
+			var nMore int
+			nMore, err = client.Read(buf[n:totalExpected])
+			if nMore > 0 {
+				n += nMore
+				bytesIn.Add(int64(nMore))
+			}
+			if err != nil {
+				break
+			}
+		}
+	}
+
+	// Inspect protocol version if blocked list is configured
+	if len(insp.BlockedProtocolVersions) > 0 {
+		pktLen, nLen, err := readVarInt(buf[:n])
+		if err != nil || nLen >= n || pktLen <= 0 {
+			return result(nil), true, "invalid minecraft handshake packet length", nil
+		}
+		packetID, nID, err := readVarInt(buf[nLen:n])
+		if err != nil || packetID != 0 || nLen+nID >= n {
+			return result(nil), true, "invalid minecraft handshake packet id", nil
+		}
+		protoVer, _, err := readVarInt(buf[nLen+nID : n])
+		if err != nil {
+			return result(nil), true, "invalid minecraft protocol version in handshake", nil
+		}
+		if slices.Contains(insp.BlockedProtocolVersions, protoVer) {
+			if ctx != nil {
+				ctx.OnSecurityEvent("blocked", fmt.Sprintf("minecraft_protocol_version_%d_blocked", protoVer))
+			}
+			return result(nil), true, fmt.Sprintf("blocked minecraft protocol version: %d", protoVer), nil
 		}
 	}
 

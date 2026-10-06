@@ -682,7 +682,7 @@ func extractDHTMessageType(data []byte) (msgType, methodName string) {
 			if actualQi+4 < len(s) {
 				lenStart := actualQi + 3
 				colonOffset := strings.Index(s[lenStart:], ":")
-				if colonOffset > 0 {
+				if colonOffset > 0 && colonOffset <= 4 {
 					lenEnd := lenStart + colonOffset
 					var nameLen int
 					if n, err := fmt.Sscanf(s[lenStart:lenEnd], "%d", &nameLen); n == 1 && err == nil {
@@ -773,10 +773,17 @@ func (i *btUDPInspector) handleDHT(ctx sdk.Context, pkt *sdk.UDPPacket) (sdk.UDP
 
 	// 3. DHT method filtering — only applies to query packets.
 	msgType, method := extractDHTMessageType(pkt.Payload)
-	if msgType == "q" && method != "" {
-		if ok, reason := i.opts.isDHTMethodAllowed(method); !ok {
-			ctx.OnSecurityEvent("blocked", reason)
-			return sdk.UDPVerdictDrop, reason, nil
+	if msgType == "q" {
+		if method == "" {
+			if len(i.opts.allowedDHTMethods) > 0 {
+				ctx.OnSecurityEvent("blocked", "bt_dht_query_missing_method")
+				return sdk.UDPVerdictDrop, "bt_dht_query_missing_method", nil
+			}
+		} else {
+			if ok, reason := i.opts.isDHTMethodAllowed(method); !ok {
+				ctx.OnSecurityEvent("blocked", reason)
+				return sdk.UDPVerdictDrop, reason, nil
+			}
 		}
 	}
 
