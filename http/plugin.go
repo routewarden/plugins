@@ -471,9 +471,18 @@ func (insp *Inspector) Run(ctx sdk.Context, client, upstream net.Conn) (sdk.Prox
 }
 
 func sendHTTPForbidden(conn net.Conn, body string) {
-	resp := fmt.Sprintf("HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
-	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	_, _ = conn.Write([]byte(resp))
+	resp := &http.Response{
+		StatusCode:    http.StatusForbidden,
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        make(http.Header),
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+		Close:         true,
+	}
+	resp.Header.Set("Content-Type", "text/plain; charset=utf-8")
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = resp.Write(conn)
 }
 
 func isHostAllowed(host string, allowedHosts []string) bool {
