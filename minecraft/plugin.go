@@ -6,8 +6,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/routewarden/tcp-warden/plugins"
-	"github.com/routewarden/tcp-warden/plugins/sdk"
+	"github.com/routewarden/cli/proxy/plugins"
+	"github.com/routewarden/cli/proxy/plugins/sdk"
 )
 
 //go:embed plugin.yaml

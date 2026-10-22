@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for inspecting FTP control connections (RF
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/ftp
+rwarden tcp plugins install https://github.com/routewarden/plugins/ftp
 
 # Or by short name
-tcp-warden plugins install ftp
+rwarden tcp plugins install ftp
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)
@@ -164,5 +164,5 @@ curl ftp://localhost:2121/
 # Output: curl: (7) Failed to connect to localhost port 2121: Connection refused
 
 # 3. View active ban in RouteWarden
-tcp-warden banlist --api http://127.0.0.1:9091
+rwarden tcp status --api http://127.0.0.1:9091
 ```

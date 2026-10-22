@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for inspecting Memcached ASCII and binary 
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/memcached
+rwarden tcp plugins install https://github.com/routewarden/plugins/memcached
 
 # Or by short name
-tcp-warden plugins install memcached
+rwarden tcp plugins install memcached
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)
@@ -156,5 +156,5 @@ echo -e "flush_all\r\n" | nc localhost 11212
 # Output: CLIENT_ERROR command 'flush_all' blocked by RouteWarden policy
 
 # 2. Check active bans in RouteWarden
-tcp-warden banlist --api http://127.0.0.1:9091
+rwarden tcp status --api http://127.0.0.1:9091
 ```

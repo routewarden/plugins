@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/routewarden/tcp-warden/plugins/sdk"
+	"github.com/routewarden/cli/proxy/plugins/sdk"
 )
 
 func TestPluginManifest(t *testing.T) {

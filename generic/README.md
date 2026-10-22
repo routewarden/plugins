@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin providing high-performance Layer 4 transpa
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/generic
+rwarden tcp plugins install https://github.com/routewarden/plugins/generic
 
 # Or by short name
-tcp-warden plugins install generic
+rwarden tcp plugins install generic
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)

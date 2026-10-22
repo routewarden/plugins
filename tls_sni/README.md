@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for zero-decryption TLS ClientHello inspec
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/tls_sni
+rwarden tcp plugins install https://github.com/routewarden/plugins/tls_sni
 
 # Or by short name
-tcp-warden plugins install tls_sni
+rwarden tcp plugins install tls_sni
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)

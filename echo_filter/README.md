@@ -17,10 +17,10 @@ Example custom RouteWarden plugin demonstrating bidirectional Layer 4 payload in
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/echo_filter
+rwarden tcp plugins install https://github.com/routewarden/plugins/echo_filter
 
 # Or by short name
-tcp-warden plugins install echo_filter
+rwarden tcp plugins install echo_filter
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)

@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for inspecting MySQL and MariaDB wire prot
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/mysql
+rwarden tcp plugins install https://github.com/routewarden/plugins/mysql
 
 # Or by short name
-tcp-warden plugins install mysql
+rwarden tcp plugins install mysql
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)
@@ -165,5 +165,5 @@ done
 mysql -h 127.0.0.1 -P 3307 -u root -p
 
 # 3. Inspect active bans in RouteWarden
-tcp-warden banlist --api http://127.0.0.1:9091
+rwarden tcp status --api http://127.0.0.1:9091
 ```

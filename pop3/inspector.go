@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/routewarden/tcp-warden/plugins/sdk"
-	"github.com/routewarden/tcp-warden/protocol"
+	"github.com/routewarden/cli/proxy/plugins/sdk"
+	"github.com/routewarden/cli/proxy/protocol"
 )
 
 // Inspector inspects POP3 mail sessions.

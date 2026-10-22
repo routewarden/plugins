@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for inspecting Secure Shell (SSH) protocol
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/ssh
+rwarden tcp plugins install https://github.com/routewarden/plugins/ssh
 
 # Or by short name
-tcp-warden plugins install ssh
+rwarden tcp plugins install ssh
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)
@@ -166,5 +166,5 @@ ssh -p 2222 user@localhost
 # Output: ssh: connect to host localhost port 2222: Connection refused
 
 # 3. View active ban in RouteWarden
-tcp-warden banlist --api http://127.0.0.1:9091
+rwarden tcp status --api http://127.0.0.1:9091
 ```

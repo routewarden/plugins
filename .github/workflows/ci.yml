@@ -59,19 +59,19 @@ jobs:
         with:
           path: plugins
 
-      - name: Checkout tcp-warden dependency
+      - name: Checkout cli dependency
         continue-on-error: true
         uses: actions/checkout@v4
         with:
-          repository: routewarden/tcp-warden
-          path: tcp-warden
+          repository: routewarden/cli
+          path: cli
 
-      - name: Ensure tcp-warden dependency exists
+      - name: Ensure cli dependency exists
         working-directory: plugins
         run: |
-          if [ ! -d "../tcp-warden" ]; then
-            echo "Cloning tcp-warden dependency via git..."
-            git clone --depth=1 https://github.com/routewarden/tcp-warden.git ../tcp-warden
+          if [ ! -d "../cli" ]; then
+            echo "Cloning cli dependency via git..."
+            git clone --depth=1 https://github.com/routewarden/cli.git ../cli
           fi
 
       - name: Set up Go 1.27.1

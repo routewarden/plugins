@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/routewarden/tcp-warden/plugins/sdk"
+	"github.com/routewarden/cli/proxy/plugins/sdk"
 )
 
 func TestMySQLPlugin_SelfTest(t *testing.T) {

@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for inspecting Domain Name System (DNS) tr
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/dns
+rwarden tcp plugins install https://github.com/routewarden/plugins/dns
 
 # Or by short name
-tcp-warden plugins install dns
+rwarden tcp plugins install dns
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)

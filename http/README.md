@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for inspecting plain HTTP/1.x traffic at L
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/http
+rwarden tcp plugins install https://github.com/routewarden/plugins/http
 
 # Or by short name
-tcp-warden plugins install http
+rwarden tcp plugins install http
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)
@@ -168,5 +168,5 @@ curl -i -A "sqlmap/1.5" http://localhost:8081/
 # Output: Connection reset / 403 Forbidden
 
 # 3. Check active bans in RouteWarden
-tcp-warden banlist --api http://127.0.0.1:9091
+rwarden tcp status --api http://127.0.0.1:9091
 ```
