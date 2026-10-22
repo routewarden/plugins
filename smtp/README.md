@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for inspecting Simple Mail Transfer Protoc
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/smtp
+rwarden tcp plugins install https://github.com/routewarden/plugins/smtp
 
 # Or by short name
-tcp-warden plugins install smtp
+rwarden tcp plugins install smtp
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)
@@ -167,5 +167,5 @@ nc -zv localhost 2525
 # Output: Connection refused
 
 # 3. View active ban in RouteWarden
-tcp-warden banlist --api http://127.0.0.1:9091
+rwarden tcp status --api http://127.0.0.1:9091
 ```

@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for inspecting AMQP 0-9-1 wire protocol tr
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/amqp
+rwarden tcp plugins install https://github.com/routewarden/plugins/amqp
 
 # Or by short name
-tcp-warden plugins install amqp
+rwarden tcp plugins install amqp
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)
@@ -166,5 +166,5 @@ python3 -c "import pika; pika.BlockingConnection(pika.ConnectionParameters('loca
 # Output: Connection refused / Timeout
 
 # 3. View active ban in RouteWarden
-tcp-warden banlist --api http://127.0.0.1:9091
+rwarden tcp status --api http://127.0.0.1:9091
 ```

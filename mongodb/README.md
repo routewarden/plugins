@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for inspecting MongoDB wire protocol traff
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/mongodb
+rwarden tcp plugins install https://github.com/routewarden/plugins/mongodb
 
 # Or by short name
-tcp-warden plugins install mongodb
+rwarden tcp plugins install mongodb
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)
@@ -165,5 +165,5 @@ done
 mongosh --port 27018
 
 # 3. View active ban in RouteWarden
-tcp-warden banlist --api http://127.0.0.1:9091
+rwarden tcp status --api http://127.0.0.1:9091
 ```

@@ -3,8 +3,8 @@ package generic
 import (
 	"net"
 
-	"github.com/routewarden/tcp-warden/plugins/sdk"
-	"github.com/routewarden/tcp-warden/protocol"
+	"github.com/routewarden/cli/proxy/plugins/sdk"
+	"github.com/routewarden/cli/proxy/protocol"
 )
 
 // Inspector provides transparent Layer 4 TCP proxying.

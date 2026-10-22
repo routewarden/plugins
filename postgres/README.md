@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for inspecting PostgreSQL wire protocol tr
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/postgres
+rwarden tcp plugins install https://github.com/routewarden/plugins/postgres
 
 # Or by short name
-tcp-warden plugins install postgres
+rwarden tcp plugins install postgres
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)
@@ -175,5 +175,5 @@ done
 psql -h localhost -p 5433 -U appuser -d appdb
 
 # 3. Check active bans in RouteWarden
-tcp-warden banlist --api http://127.0.0.1:9091
+rwarden tcp status --api http://127.0.0.1:9091
 ```

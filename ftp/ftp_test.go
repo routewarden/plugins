@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/routewarden/tcp-warden/plugins/sdk"
+	"github.com/routewarden/cli/proxy/plugins/sdk"
 )
 
 func TestFTPPlugin_SelfTest(t *testing.T) {

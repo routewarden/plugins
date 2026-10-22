@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for inspecting Internet Message Access Pro
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/imap
+rwarden tcp plugins install https://github.com/routewarden/plugins/imap
 
 # Or by short name
-tcp-warden plugins install imap
+rwarden tcp plugins install imap
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)
@@ -164,5 +164,5 @@ nc -zv localhost 1143
 # Output: Connection refused
 
 # 3. View active ban in RouteWarden
-tcp-warden banlist --api http://127.0.0.1:9091
+rwarden tcp status --api http://127.0.0.1:9091
 ```

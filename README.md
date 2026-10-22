@@ -1,8 +1,8 @@
 # RouteWarden Protocol & Filter Plugins
 
-This repository hosts official modular protocol inspectors and stream filters for RouteWarden (including [tcp-warden](https://github.com/routewarden/tcp-warden)).
+This repository hosts official modular protocol inspectors and stream filters for RouteWarden (via RouteWarden CLI `rwarden tcp`).
 
-The core `tcp-warden` binary provides high-performance transparent Layer 4 TCP proxying, rate limiting, IP filtering, and geo-blocking (`generic`). All protocol-specific inspectors (`ssh`, `smtp`, `pop3`, `imap`, `postgres`, `mysql`, `redis`, `http`, `mongodb`, etc.) are distributed modularly from this repository, allowing users to install only what is required.
+RouteWarden CLI (`rwarden tcp` / `cli`) provides high-performance transparent Layer 4 TCP proxying, rate limiting, IP filtering, and geo-blocking (`generic`). All protocol-specific inspectors (`ssh`, `smtp`, `pop3`, `imap`, `postgres`, `mysql`, `redis`, `http`, `mongodb`, etc.) are distributed modularly from this repository, allowing users to install only what is required.
 
 ---
 
@@ -160,16 +160,16 @@ networks:
 
 ---
 
-## Installation & Usage in `tcp-warden`
+## Installation & Usage in `rwarden tcp`
 
 ### 1. Via Command Line
 ```bash
 # Install by short name
-tcp-warden plugins install postgres
-tcp-warden plugins install redis
+rwarden tcp plugins install postgres
+rwarden tcp plugins install redis
 
 # Install from Git repository
-tcp-warden plugins install https://github.com/routewarden/plugins/mongodb
+rwarden tcp plugins install https://github.com/routewarden/plugins/mongodb
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)
@@ -194,14 +194,14 @@ services:
 ### 3. Plugin Management
 ```bash
 # List all installed and active plugins
-tcp-warden plugins list
+rwarden tcp plugins list
 
 # Enable or disable plugins
-tcp-warden plugins enable postgres
-tcp-warden plugins disable postgres
+rwarden tcp plugins enable postgres
+rwarden tcp plugins disable postgres
 
 # Uninstall a plugin
-tcp-warden plugins uninstall postgres
+rwarden tcp plugins uninstall postgres
 ```
 
 ---

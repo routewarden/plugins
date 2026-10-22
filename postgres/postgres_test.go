@@ -6,7 +6,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/routewarden/tcp-warden/plugins/sdk"
+	"github.com/routewarden/cli/proxy/plugins/sdk"
 )
 
 func TestPostgresPlugin_SelfTest(t *testing.T) {

@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for inspecting LDAPv3 protocol traffic, pr
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/ldap
+rwarden tcp plugins install https://github.com/routewarden/plugins/ldap
 
 # Or by short name
-tcp-warden plugins install ldap
+rwarden tcp plugins install ldap
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)
@@ -165,5 +165,5 @@ done
 ldapsearch -H ldap://localhost:1390 -x -b "dc=example,dc=org"
 
 # 3. View active ban in RouteWarden
-tcp-warden banlist --api http://127.0.0.1:9091
+rwarden tcp status --api http://127.0.0.1:9091
 ```

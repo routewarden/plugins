@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for inspecting Redis RESP wire protocol tr
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/redis
+rwarden tcp plugins install https://github.com/routewarden/plugins/redis
 
 # Or by short name
-tcp-warden plugins install redis
+rwarden tcp plugins install redis
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)
@@ -178,5 +178,5 @@ redis-cli -p 6380 ping
 # Output: Could not connect to Redis at 127.0.0.1:6380: Connection refused
 
 # Check ban list in RouteWarden
-tcp-warden banlist --api http://127.0.0.1:9091
+rwarden tcp status --api http://127.0.0.1:9091
 ```

@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for inspecting MQTT wire protocol traffic 
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/mqtt
+rwarden tcp plugins install https://github.com/routewarden/plugins/mqtt
 
 # Or by short name
-tcp-warden plugins install mqtt
+rwarden tcp plugins install mqtt
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)
@@ -158,5 +158,5 @@ mosquitto_sub -h localhost -p 1884 -i "shodan-scanner-test" -t "#"
 # Output: Connection dropped / Connection refused
 
 # 2. View active ban in RouteWarden
-tcp-warden banlist --api http://127.0.0.1:9091
+rwarden tcp status --api http://127.0.0.1:9091
 ```

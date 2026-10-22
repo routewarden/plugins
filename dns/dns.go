@@ -37,9 +37,9 @@ import (
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
-	"github.com/routewarden/tcp-warden/plugins"
-	"github.com/routewarden/tcp-warden/plugins/sdk"
-	"github.com/routewarden/tcp-warden/protocol"
+	"github.com/routewarden/cli/proxy/plugins"
+	"github.com/routewarden/cli/proxy/plugins/sdk"
+	"github.com/routewarden/cli/proxy/protocol"
 )
 
 //go:embed plugin.yaml

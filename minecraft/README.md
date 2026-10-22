@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for inspecting Minecraft Java Edition Serv
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/minecraft
+rwarden tcp plugins install https://github.com/routewarden/plugins/minecraft
 
 # Or by short name
-tcp-warden plugins install minecraft
+rwarden tcp plugins install minecraft
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)

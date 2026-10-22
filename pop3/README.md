@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for inspecting Post Office Protocol (POP3)
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/pop3
+rwarden tcp plugins install https://github.com/routewarden/plugins/pop3
 
 # Or by short name
-tcp-warden plugins install pop3
+rwarden tcp plugins install pop3
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)
@@ -165,5 +165,5 @@ nc -zv localhost 1110
 # Output: Connection refused
 
 # 3. View active ban in RouteWarden
-tcp-warden banlist --api http://127.0.0.1:9091
+rwarden tcp status --api http://127.0.0.1:9091
 ```

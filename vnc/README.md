@@ -18,10 +18,10 @@ Standalone RouteWarden modular plugin for inspecting RFB (Remote Framebuffer) pr
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/vnc
+rwarden tcp plugins install https://github.com/routewarden/plugins/vnc
 
 # Or by short name
-tcp-warden plugins install vnc
+rwarden tcp plugins install vnc
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)
@@ -153,5 +153,5 @@ vncviewer localhost:5901
 # Output: Connection refused / Server dropped connection
 
 # 3. View active ban in RouteWarden
-tcp-warden banlist --api http://127.0.0.1:9091
+rwarden tcp status --api http://127.0.0.1:9091
 ```

@@ -21,10 +21,10 @@ Standalone RouteWarden modular plugin for inspecting BitTorrent traffic across b
 ### 1. Via RouteWarden CLI
 ```bash
 # Install from official repository
-tcp-warden plugins install https://github.com/routewarden/plugins/bittorrent
+rwarden tcp plugins install https://github.com/routewarden/plugins/bittorrent
 
 # Or by short name
-tcp-warden plugins install bittorrent
+rwarden tcp plugins install bittorrent
 ```
 
 ### 2. Declarative Config (`tcp-warden.yaml`)
